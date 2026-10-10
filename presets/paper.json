@@ -1,0 +1,12 @@
+{
+  "label": "กระดาษ อ่านง่าย (แนว explainer)",
+  "colors": {
+    "primary": "#2b2b2b",
+    "primary_deep": "#141414",
+    "primary_mid": "#3a3a3a",
+    "accent": "#e4572e",
+    "accent2": "#f2c14e",
+    "paper": "#f1efe9",
+    "ink": "#1a1a1a"
+  }
+}

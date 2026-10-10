@@ -1,0 +1,18 @@
+{
+  "name": "pun-nattapatch",
+  "owner": {
+    "name": "ปัน ณัฐพัชร์ (@pun_nattapatch)",
+    "url": "https://punnattapatch.com"
+  },
+  "metadata": {
+    "description": "เครื่องมือฟรีจาก @pun_nattapatch"
+  },
+  "plugins": [
+    {
+      "name": "tad-clip",
+      "source": "./",
+      "description": "ตัดคลิปพูดหน้ากล้องภาษาไทยด้วย Claude — ฟรี ไม่ใช้ API ไม่มีรายเดือน",
+      "version": "1.0.0"
+    }
+  ]
+}

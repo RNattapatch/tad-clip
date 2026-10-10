@@ -1,0 +1,22 @@
+{
+  "name": "tad-clip",
+  "displayName": "ตัดคลิป by pun_nattapatch",
+  "version": "1.0.0",
+  "description": "ตัดคลิปพูดหน้ากล้องภาษาไทยด้วย Claude — ตัดเทคซ้ำ ซับคาราโอเกะ แทรกภาพ/คลิป/มีม/เสียง จบเป็น MP4 ฟรีทั้งหมด ไม่ใช้ API ไม่มีรายเดือน",
+  "author": {
+    "name": "ปัน ณัฐพัชร์ (@pun_nattapatch)",
+    "url": "https://punnattapatch.com/free/tad-clip"
+  },
+  "homepage": "https://punnattapatch.com/free/tad-clip",
+  "repository": "https://github.com/RNattapatch/tad-clip",
+  "license": "PolyForm-Perimeter-1.0.1",
+  "keywords": [
+    "video",
+    "reel",
+    "tiktok",
+    "subtitle",
+    "thai",
+    "whisper",
+    "ffmpeg"
+  ]
+}
