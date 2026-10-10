@@ -1,0 +1,1460 @@
+{
+  "transcription": [
+    {
+      "offsets": {
+        "from": 180,
+        "to": 2000
+      },
+      "text": "เพื่อแกettreขายวิกกิจจากกรษาสีดำ",
+      "tokens": [
+        {
+          "text": "เพ",
+          "offsets": {
+            "from": 180,
+            "to": 340
+          }
+        },
+        {
+          "text": "ื่",
+          "offsets": {
+            "from": 340,
+            "to": 420
+          }
+        },
+        {
+          "text": "อ",
+          "offsets": {
+            "from": 420,
+            "to": 440
+          }
+        },
+        {
+          "text": "แ",
+          "offsets": {
+            "from": 440,
+            "to": 560
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 560,
+            "to": 580
+          }
+        },
+        {
+          "text": "ettre",
+          "offsets": {
+            "from": 580,
+            "to": 640
+          }
+        },
+        {
+          "text": "ข",
+          "offsets": {
+            "from": 640,
+            "to": 740
+          }
+        },
+        {
+          "text": "าย",
+          "offsets": {
+            "from": 740,
+            "to": 820
+          }
+        },
+        {
+          "text": "ว",
+          "offsets": {
+            "from": 820,
+            "to": 920
+          }
+        },
+        {
+          "text": "ิ",
+          "offsets": {
+            "from": 920,
+            "to": 960
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 960,
+            "to": 1000
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 1000,
+            "to": 1100
+          }
+        },
+        {
+          "text": "ิ",
+          "offsets": {
+            "from": 1100,
+            "to": 1100
+          }
+        },
+        {
+          "text": "จ",
+          "offsets": {
+            "from": 1100,
+            "to": 1140
+          }
+        },
+        {
+          "text": "จ",
+          "offsets": {
+            "from": 1140,
+            "to": 1340
+          }
+        },
+        {
+          "text": "าก",
+          "offsets": {
+            "from": 1340,
+            "to": 1360
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 1360,
+            "to": 1440
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 1440,
+            "to": 1460
+          }
+        },
+        {
+          "text": "ษ",
+          "offsets": {
+            "from": 1460,
+            "to": 1560
+          }
+        },
+        {
+          "text": "า",
+          "offsets": {
+            "from": 1560,
+            "to": 1580
+          }
+        },
+        {
+          "text": "ส",
+          "offsets": {
+            "from": 1580,
+            "to": 1740
+          }
+        },
+        {
+          "text": "ี",
+          "offsets": {
+            "from": 1740,
+            "to": 1780
+          }
+        },
+        {
+          "text": "ด",
+          "offsets": {
+            "from": 1780,
+            "to": 1900
+          }
+        },
+        {
+          "text": "ำ",
+          "offsets": {
+            "from": 1900,
+            "to": 2000
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 2360,
+        "to": 7580
+      },
+      "text": "และนี่คือหลากฯ이�uireงหลังการรับมือวิกกิจครั้งนั้น",
+      "tokens": [
+        {
+          "text": "แล",
+          "offsets": {
+            "from": 2360,
+            "to": 2520
+          }
+        },
+        {
+          "text": "ะ",
+          "offsets": {
+            "from": 2520,
+            "to": 2620
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 2620,
+            "to": 2660
+          }
+        },
+        {
+          "text": "ี่",
+          "offsets": {
+            "from": 2660,
+            "to": 2800
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 2800,
+            "to": 5620
+          }
+        },
+        {
+          "text": "ื",
+          "offsets": {
+            "from": 5620,
+            "to": 5660
+          }
+        },
+        {
+          "text": "อ",
+          "offsets": {
+            "from": 5660,
+            "to": 5660
+          }
+        },
+        {
+          "text": "ห",
+          "offsets": {
+            "from": 5660,
+            "to": 5780
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 5780,
+            "to": 5800
+          }
+        },
+        {
+          "text": "าก",
+          "offsets": {
+            "from": 5800,
+            "to": 5840
+          }
+        },
+        {
+          "text": "ฯ",
+          "offsets": {
+            "from": 5840,
+            "to": 5960
+          }
+        },
+        {
+          "text": "이�",
+          "offsets": {
+            "from": 5960,
+            "to": 6140
+          }
+        },
+        {
+          "text": "uire",
+          "offsets": {
+            "from": 6140,
+            "to": 6240
+          }
+        },
+        {
+          "text": "ง",
+          "offsets": {
+            "from": 6240,
+            "to": 6240
+          }
+        },
+        {
+          "text": "ห",
+          "offsets": {
+            "from": 6240,
+            "to": 6340
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 6340,
+            "to": 6400
+          }
+        },
+        {
+          "text": "ั",
+          "offsets": {
+            "from": 6400,
+            "to": 6400
+          }
+        },
+        {
+          "text": "ง",
+          "offsets": {
+            "from": 6400,
+            "to": 6440
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 6440,
+            "to": 6580
+          }
+        },
+        {
+          "text": "าร",
+          "offsets": {
+            "from": 6580,
+            "to": 6660
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 6660,
+            "to": 6760
+          }
+        },
+        {
+          "text": "ั",
+          "offsets": {
+            "from": 6760,
+            "to": 6760
+          }
+        },
+        {
+          "text": "บ",
+          "offsets": {
+            "from": 6760,
+            "to": 6780
+          }
+        },
+        {
+          "text": "ม",
+          "offsets": {
+            "from": 6780,
+            "to": 6940
+          }
+        },
+        {
+          "text": "ื",
+          "offsets": {
+            "from": 6940,
+            "to": 6940
+          }
+        },
+        {
+          "text": "อ",
+          "offsets": {
+            "from": 6940,
+            "to": 6940
+          }
+        },
+        {
+          "text": "ว",
+          "offsets": {
+            "from": 6940,
+            "to": 7020
+          }
+        },
+        {
+          "text": "ิ",
+          "offsets": {
+            "from": 7020,
+            "to": 7020
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 7020,
+            "to": 7100
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 7100,
+            "to": 7140
+          }
+        },
+        {
+          "text": "ิ",
+          "offsets": {
+            "from": 7140,
+            "to": 7180
+          }
+        },
+        {
+          "text": "จ",
+          "offsets": {
+            "from": 7180,
+            "to": 7180
+          }
+        },
+        {
+          "text": "คร",
+          "offsets": {
+            "from": 7180,
+            "to": 7280
+          }
+        },
+        {
+          "text": "ั้",
+          "offsets": {
+            "from": 7280,
+            "to": 7340
+          }
+        },
+        {
+          "text": "ง",
+          "offsets": {
+            "from": 7340,
+            "to": 7360
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 7360,
+            "to": 7440
+          }
+        },
+        {
+          "text": "ั้",
+          "offsets": {
+            "from": 7440,
+            "to": 7500
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 7500,
+            "to": 7580
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 7580,
+        "to": 10700
+      },
+      "text": "ที่คุณเก้าไปใช้ให้ขายดีขึ้นได้ครับ",
+      "tokens": [
+        {
+          "text": "ท",
+          "offsets": {
+            "from": 7580,
+            "to": 7660
+          }
+        },
+        {
+          "text": "ี่",
+          "offsets": {
+            "from": 7660,
+            "to": 7660
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 7660,
+            "to": 7820
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 7820,
+            "to": 7880
+          }
+        },
+        {
+          "text": "ณ",
+          "offsets": {
+            "from": 7880,
+            "to": 7880
+          }
+        },
+        {
+          "text": "เก",
+          "offsets": {
+            "from": 7880,
+            "to": 7980
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 7980,
+            "to": 8000
+          }
+        },
+        {
+          "text": "า",
+          "offsets": {
+            "from": 8000,
+            "to": 8040
+          }
+        },
+        {
+          "text": "ไป",
+          "offsets": {
+            "from": 8040,
+            "to": 8120
+          }
+        },
+        {
+          "text": "ใช",
+          "offsets": {
+            "from": 8120,
+            "to": 8260
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 8260,
+            "to": 8340
+          }
+        },
+        {
+          "text": "ให",
+          "offsets": {
+            "from": 8340,
+            "to": 8460
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 8460,
+            "to": 8500
+          }
+        },
+        {
+          "text": "ข",
+          "offsets": {
+            "from": 8500,
+            "to": 8580
+          }
+        },
+        {
+          "text": "าย",
+          "offsets": {
+            "from": 8580,
+            "to": 8640
+          }
+        },
+        {
+          "text": "ด",
+          "offsets": {
+            "from": 8640,
+            "to": 8740
+          }
+        },
+        {
+          "text": "ี",
+          "offsets": {
+            "from": 8740,
+            "to": 8780
+          }
+        },
+        {
+          "text": "ข",
+          "offsets": {
+            "from": 8780,
+            "to": 8880
+          }
+        },
+        {
+          "text": "ึ",
+          "offsets": {
+            "from": 8880,
+            "to": 8880
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 8880,
+            "to": 8900
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 8900,
+            "to": 8940
+          }
+        },
+        {
+          "text": "ได",
+          "offsets": {
+            "from": 8940,
+            "to": 9020
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 9020,
+            "to": 9100
+          }
+        },
+        {
+          "text": "คร",
+          "offsets": {
+            "from": 9100,
+            "to": 9180
+          }
+        },
+        {
+          "text": "ั",
+          "offsets": {
+            "from": 9180,
+            "to": 9760
+          }
+        },
+        {
+          "text": "บ",
+          "offsets": {
+            "from": 10460,
+            "to": 10700
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 10700,
+        "to": 13100
+      },
+      "text": "ตอนนั้นแบนเลยที่จะทำแคมเปงกรษาสีดำ p at",
+      "tokens": [
+        {
+          "text": "ต",
+          "offsets": {
+            "from": 10700,
+            "to": 10840
+          }
+        },
+        {
+          "text": "อน",
+          "offsets": {
+            "from": 10840,
+            "to": 10900
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 10900,
+            "to": 10960
+          }
+        },
+        {
+          "text": "ั้",
+          "offsets": {
+            "from": 10960,
+            "to": 11020
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 11020,
+            "to": 11020
+          }
+        },
+        {
+          "text": "แ",
+          "offsets": {
+            "from": 11020,
+            "to": 11120
+          }
+        },
+        {
+          "text": "บ",
+          "offsets": {
+            "from": 11120,
+            "to": 11140
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 11140,
+            "to": 11200
+          }
+        },
+        {
+          "text": "เลย",
+          "offsets": {
+            "from": 11200,
+            "to": 11300
+          }
+        },
+        {
+          "text": "ท",
+          "offsets": {
+            "from": 11300,
+            "to": 11440
+          }
+        },
+        {
+          "text": "ี่",
+          "offsets": {
+            "from": 11440,
+            "to": 11440
+          }
+        },
+        {
+          "text": "จะ",
+          "offsets": {
+            "from": 11440,
+            "to": 11520
+          }
+        },
+        {
+          "text": "ทำ",
+          "offsets": {
+            "from": 11520,
+            "to": 11700
+          }
+        },
+        {
+          "text": "แ",
+          "offsets": {
+            "from": 11700,
+            "to": 11800
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 11800,
+            "to": 11880
+          }
+        },
+        {
+          "text": "ม",
+          "offsets": {
+            "from": 11880,
+            "to": 11920
+          }
+        },
+        {
+          "text": "เป",
+          "offsets": {
+            "from": 11920,
+            "to": 12020
+          }
+        },
+        {
+          "text": "ง",
+          "offsets": {
+            "from": 12020,
+            "to": 12100
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 12100,
+            "to": 12240
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 12240,
+            "to": 12280
+          }
+        },
+        {
+          "text": "ษ",
+          "offsets": {
+            "from": 12280,
+            "to": 12360
+          }
+        },
+        {
+          "text": "า",
+          "offsets": {
+            "from": 12360,
+            "to": 12420
+          }
+        },
+        {
+          "text": "ส",
+          "offsets": {
+            "from": 12420,
+            "to": 12540
+          }
+        },
+        {
+          "text": "ี",
+          "offsets": {
+            "from": 12540,
+            "to": 12580
+          }
+        },
+        {
+          "text": "ด",
+          "offsets": {
+            "from": 12580,
+            "to": 12700
+          }
+        },
+        {
+          "text": "ำ",
+          "offsets": {
+            "from": 12700,
+            "to": 12780
+          }
+        },
+        {
+          "text": " p",
+          "offsets": {
+            "from": 12780,
+            "to": 12920
+          }
+        },
+        {
+          "text": " at",
+          "offsets": {
+            "from": 12920,
+            "to": 13100
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 13100,
+        "to": 17140
+      },
+      "text": "แต่ผลนี้ได้คือลูกค้ากรับโป๊ดรูปน้ำซุปที่กายไปสีดำ",
+      "tokens": [
+        {
+          "text": "แต",
+          "offsets": {
+            "from": 13100,
+            "to": 13400
+          }
+        },
+        {
+          "text": "่",
+          "offsets": {
+            "from": 13400,
+            "to": 14260
+          }
+        },
+        {
+          "text": "ผ",
+          "offsets": {
+            "from": 14260,
+            "to": 14460
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 14460,
+            "to": 14540
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 14540,
+            "to": 14580
+          }
+        },
+        {
+          "text": "ี้",
+          "offsets": {
+            "from": 14580,
+            "to": 14620
+          }
+        },
+        {
+          "text": "ได",
+          "offsets": {
+            "from": 14620,
+            "to": 14720
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 14720,
+            "to": 14820
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 14820,
+            "to": 14920
+          }
+        },
+        {
+          "text": "ื",
+          "offsets": {
+            "from": 14920,
+            "to": 14940
+          }
+        },
+        {
+          "text": "อ",
+          "offsets": {
+            "from": 14940,
+            "to": 14960
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 14960,
+            "to": 15060
+          }
+        },
+        {
+          "text": "ู",
+          "offsets": {
+            "from": 15060,
+            "to": 15060
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 15060,
+            "to": 15120
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 15120,
+            "to": 15220
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 15220,
+            "to": 15220
+          }
+        },
+        {
+          "text": "าก",
+          "offsets": {
+            "from": 15220,
+            "to": 15460
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 15460,
+            "to": 15540
+          }
+        },
+        {
+          "text": "ั",
+          "offsets": {
+            "from": 15540,
+            "to": 15560
+          }
+        },
+        {
+          "text": "บ",
+          "offsets": {
+            "from": 15560,
+            "to": 15560
+          }
+        },
+        {
+          "text": "โ",
+          "offsets": {
+            "from": 15560,
+            "to": 15700
+          }
+        },
+        {
+          "text": "ป",
+          "offsets": {
+            "from": 15700,
+            "to": 15720
+          }
+        },
+        {
+          "text": "๊",
+          "offsets": {
+            "from": 15720,
+            "to": 15780
+          }
+        },
+        {
+          "text": "ด",
+          "offsets": {
+            "from": 15780,
+            "to": 15780
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 15780,
+            "to": 15900
+          }
+        },
+        {
+          "text": "ู",
+          "offsets": {
+            "from": 15900,
+            "to": 15960
+          }
+        },
+        {
+          "text": "ป",
+          "offsets": {
+            "from": 15960,
+            "to": 15980
+          }
+        },
+        {
+          "text": "น",
+          "offsets": {
+            "from": 15980,
+            "to": 16080
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 16080,
+            "to": 16120
+          }
+        },
+        {
+          "text": "ำ",
+          "offsets": {
+            "from": 16120,
+            "to": 16120
+          }
+        },
+        {
+          "text": "ซ",
+          "offsets": {
+            "from": 16120,
+            "to": 16220
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 16220,
+            "to": 16280
+          }
+        },
+        {
+          "text": "ป",
+          "offsets": {
+            "from": 16280,
+            "to": 16300
+          }
+        },
+        {
+          "text": "ท",
+          "offsets": {
+            "from": 16300,
+            "to": 16420
+          }
+        },
+        {
+          "text": "ี่",
+          "offsets": {
+            "from": 16420,
+            "to": 16480
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 16480,
+            "to": 16600
+          }
+        },
+        {
+          "text": "าย",
+          "offsets": {
+            "from": 16600,
+            "to": 16600
+          }
+        },
+        {
+          "text": "ไป",
+          "offsets": {
+            "from": 16600,
+            "to": 16720
+          }
+        },
+        {
+          "text": "ส",
+          "offsets": {
+            "from": 16720,
+            "to": 16880
+          }
+        },
+        {
+          "text": "ี",
+          "offsets": {
+            "from": 16880,
+            "to": 16880
+          }
+        },
+        {
+          "text": "ด",
+          "offsets": {
+            "from": 16880,
+            "to": 17020
+          }
+        },
+        {
+          "text": "ำ",
+          "offsets": {
+            "from": 17020,
+            "to": 17140
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 17360,
+        "to": 18840
+      },
+      "text": "ผลจากกรษารุ natürlich ๆ มั๊ก แคล น",
+      "tokens": [
+        {
+          "text": "ผ",
+          "offsets": {
+            "from": 17360,
+            "to": 17520
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 17520,
+            "to": 17560
+          }
+        },
+        {
+          "text": "จ",
+          "offsets": {
+            "from": 17560,
+            "to": 17680
+          }
+        },
+        {
+          "text": "าก",
+          "offsets": {
+            "from": 17680,
+            "to": 17740
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 17740,
+            "to": 17860
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 17860,
+            "to": 17880
+          }
+        },
+        {
+          "text": "ษ",
+          "offsets": {
+            "from": 17880,
+            "to": 17960
+          }
+        },
+        {
+          "text": "า",
+          "offsets": {
+            "from": 17960,
+            "to": 18020
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 18020,
+            "to": 18100
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 18100,
+            "to": 18100
+          }
+        },
+        {
+          "text": " natürlich",
+          "offsets": {
+            "from": 18100,
+            "to": 18160
+          }
+        },
+        {
+          "text": " ๆ",
+          "offsets": {
+            "from": 18360,
+            "to": 18480
+          }
+        },
+        {
+          "text": " ม",
+          "offsets": {
+            "from": 18480,
+            "to": 18480
+          }
+        },
+        {
+          "text": "ั",
+          "offsets": {
+            "from": 18480,
+            "to": 18500
+          }
+        },
+        {
+          "text": "๊",
+          "offsets": {
+            "from": 18500,
+            "to": 18520
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 18520,
+            "to": 18560
+          }
+        },
+        {
+          "text": " แ",
+          "offsets": {
+            "from": 18660,
+            "to": 18700
+          }
+        },
+        {
+          "text": "ค",
+          "offsets": {
+            "from": 18700,
+            "to": 18720
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 18720,
+            "to": 18800
+          }
+        },
+        {
+          "text": " น",
+          "offsets": {
+            "from": 18840,
+            "to": 18840
+          }
+        }
+      ]
+    },
+    {
+      "offsets": {
+        "from": 19480,
+        "to": 21500
+      },
+      "text": "ผลจากการใช้กรษารุ'' ลุุн cably",
+      "tokens": [
+        {
+          "text": "ผ",
+          "offsets": {
+            "from": 19480,
+            "to": 19640
+          }
+        },
+        {
+          "text": "ล",
+          "offsets": {
+            "from": 19640,
+            "to": 19740
+          }
+        },
+        {
+          "text": "จ",
+          "offsets": {
+            "from": 19740,
+            "to": 19860
+          }
+        },
+        {
+          "text": "าก",
+          "offsets": {
+            "from": 19860,
+            "to": 19940
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 19940,
+            "to": 20040
+          }
+        },
+        {
+          "text": "าร",
+          "offsets": {
+            "from": 20040,
+            "to": 20120
+          }
+        },
+        {
+          "text": "ใช",
+          "offsets": {
+            "from": 20120,
+            "to": 20260
+          }
+        },
+        {
+          "text": "้",
+          "offsets": {
+            "from": 20260,
+            "to": 20340
+          }
+        },
+        {
+          "text": "ก",
+          "offsets": {
+            "from": 20340,
+            "to": 20440
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 20440,
+            "to": 20460
+          }
+        },
+        {
+          "text": "ษ",
+          "offsets": {
+            "from": 20460,
+            "to": 20540
+          }
+        },
+        {
+          "text": "า",
+          "offsets": {
+            "from": 20540,
+            "to": 20580
+          }
+        },
+        {
+          "text": "ร",
+          "offsets": {
+            "from": 20580,
+            "to": 20680
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 20680,
+            "to": 20680
+          }
+        },
+        {
+          "text": "''",
+          "offsets": {
+            "from": 20680,
+            "to": 20680
+          }
+        },
+        {
+          "text": " ล",
+          "offsets": {
+            "from": 20780,
+            "to": 21020
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 21020,
+            "to": 21020
+          }
+        },
+        {
+          "text": "ุ",
+          "offsets": {
+            "from": 21020,
+            "to": 21020
+          }
+        },
+        {
+          "text": "н",
+          "offsets": {
+            "from": 21020,
+            "to": 21020
+          }
+        },
+        {
+          "text": " cab",
+          "offsets": {
+            "from": 21020,
+            "to": 21020
+          }
+        },
+        {
+          "text": "ly",
+          "offsets": {
+            "from": 21020,
+            "to": 21500
+          }
+        }
+      ]
+    }
+  ]
+}

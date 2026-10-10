@@ -1,0 +1,252 @@
+{
+  "title": "เซลล์ดาวลาออก ลูกค้าหายตาม (ตัวอย่าง look vox)",
+  "source_script": "(ตัวอย่างของ skill · หัวข้อหมวด ปั้นทีมขาย · ตัวเลข/แชตในไฟล์นี้เป็นค่าตัวอย่าง ต้องแทนด้วยของจริงก่อนใช้งาน)",
+  "look": "vox",
+  "style": "collage",
+  "fps": 30,
+  "out": "out-vox",
+  "shots": [
+    {
+      "id": "01",
+      "t": [
+        0,
+        2.6
+      ],
+      "layout": "split",
+      "beat": "cold-open",
+      "say": "เซลล์ที่ขายดีที่สุดลาออกวันศุกร์ วันจันทร์ลูกค้าโทรหาเขาที่บริษัทใหม่",
+      "visual": {
+        "ai": "empty-desk",
+        "treat": "print"
+      },
+      "overlays": [
+        {
+          "type": "hook-pill",
+          "text": "เซลล์ดาวลาออก *ลูกค้าหายตาม*",
+          "y": 50
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "t": [
+        2.6,
+        5.2
+      ],
+      "layout": "full-speaker",
+      "beat": "question",
+      "say": "คำถามคือ ทำไมลูกค้าตามคนไป ไม่ตามบริษัท",
+      "overlays": [
+        {
+          "type": "keyword",
+          "lines": [
+            "ทำไมลูกค้า",
+            "ตามคนไป",
+            "ไม่ตามบริษัท?"
+          ],
+          "y": 56
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "t": [
+        5.2,
+        9.4
+      ],
+      "layout": "full-card",
+      "beat": "context",
+      "say": "ดูแชตนี้ครับ ลูกค้าไม่ได้ถามว่าบริษัทไหน ถามแค่ว่าราคาเดิมไหม",
+      "visual": {
+        "card": {
+          "type": "doc",
+          "kind": "chat",
+          "meta": "LINE ส่วนตัวของเซลล์ · 3 วันหลังลาออก",
+          "lines": [
+            "เซลล์: ผมย้ายบริษัทแล้วนะครับพี่",
+            "ลูกค้า: *ราคาเดิมนะ ส่งเหมือนเดิม*",
+            "เซลล์: ได้ครับ เหมือนเดิมทุกอย่าง"
+          ],
+          "source": "ตัวอย่าง — แทนด้วยแชตจริง (ปิดชื่อ)"
+        }
+      }
+    },
+    {
+      "id": "04",
+      "t": [
+        9.4,
+        15.4
+      ],
+      "layout": "full-card",
+      "beat": "mechanism",
+      "say": "มันสะสมทีละนิด ปีแรกลูกค้าแอดไลน์ส่วนตัว ปีที่สองราคาที่ตกลงกันอยู่ในแชต ปีที่สามเขาลาออก ทุกอย่างออกไปด้วย",
+      "visual": {
+        "card": {
+          "type": "timeline",
+          "heading": "ลูกค้าย้ายไป*ทีละนิด*",
+          "events": [
+            {
+              "t": "ปีที่ 1",
+              "text": "ลูกค้าแอด LINE ส่วนตัวเซลล์"
+            },
+            {
+              "t": "ปีที่ 2",
+              "text": "ราคา/ข้อตกลงอยู่ในแชตเขาคนเดียว"
+            },
+            {
+              "t": "ปีที่ 3",
+              "text": "เขาลาออก *ประวัติออกไปด้วย*"
+            }
+          ],
+          "hot": [
+            2
+          ],
+          "step": 1.4
+        }
+      }
+    },
+    {
+      "id": "05",
+      "t": [
+        15.4,
+        19.4
+      ],
+      "layout": "cutout",
+      "beat": "mechanism",
+      "say": "บริษัทเหลือแค่เบอร์ลูกค้า แต่ประวัติว่าคุยอะไรกันไว้ อยู่ในมือถือเครื่องเดียว",
+      "visual": {
+        "ai": "phone-vault",
+        "treat": "print"
+      },
+      "overlays": [
+        {
+          "type": "annotate",
+          "shape": "circle",
+          "x": 50,
+          "y": 40,
+          "w": 46,
+          "h": 22,
+          "delay": 0.9
+        },
+        {
+          "type": "label",
+          "text": "ประวัติลูกค้าทั้งหมด",
+          "x": 50,
+          "y": 17,
+          "color": "primary"
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "t": [
+        19.4,
+        22.4
+      ],
+      "layout": "full-card",
+      "beat": "turn",
+      "say": "แต่ปัญหาไม่ใช่เซลล์ไม่ภักดีนะครับ",
+      "visual": {
+        "card": {
+          "type": "chapter",
+          "kicker": "แต่ไม่ใช่เพราะคน",
+          "n": "02",
+          "title": "ปัญหาอยู่ที่*ระบบ*"
+        }
+      }
+    },
+    {
+      "id": "07",
+      "t": [
+        22.4,
+        27.4
+      ],
+      "layout": "full-card",
+      "beat": "mechanism",
+      "say": "ทีมที่ลูกค้าคุยผ่าน LINE OA บริษัท พอเซลล์ลาออก ลูกค้ายังอยู่เกือบหมด",
+      "visual": {
+        "card": {
+          "type": "chart",
+          "kind": "bar",
+          "heading": "ลูกค้าที่*ยังอยู่*",
+          "sub": "6 เดือนหลังเซลล์คนนั้นลาออก",
+          "x": [
+            "แชตส่วนตัว",
+            "LINE OA บริษัท"
+          ],
+          "series": [
+            {
+              "label": "ลูกค้าที่ยังอยู่",
+              "values": [
+                35,
+                88
+              ]
+            }
+          ],
+          "hot": [
+            1
+          ],
+          "fmt": "{v}%",
+          "max": 100,
+          "source": "ตัวอย่าง — แทนด้วยตัวเลขจากระบบของคุณ"
+        }
+      }
+    },
+    {
+      "id": "08",
+      "t": [
+        27.4,
+        32.4
+      ],
+      "layout": "proof",
+      "beat": "proof",
+      "say": "ของลูกค้าผม ทุกแชตเข้า OA กลาง เซลล์คนไหนรับ เห็นหมด",
+      "visual": {
+        "proof": "อัดจอแชตลูกค้าจริง แชตลูกค้ารายเดียวมีชื่อเซลล์ 2 คนรับต่อกัน (ปิดชื่อลูกค้า)"
+      },
+      "overlays": [
+        {
+          "type": "highlight",
+          "x": 50,
+          "y": 46,
+          "w": 80,
+          "h": 4,
+          "delay": 0.6
+        },
+        {
+          "type": "source",
+          "text": "แชตลูกค้าจริง · ปิดชื่อ"
+        }
+      ]
+    },
+    {
+      "id": "09",
+      "t": [
+        32.4,
+        37
+      ],
+      "layout": "full-card",
+      "beat": "so-what",
+      "say": "พรุ่งนี้เช็คลูกค้าสิบรายใหญ่ คุยผ่านไลน์ของใคร ถ้าเป็นของคน ไม่ใช่ของบริษัท เริ่มย้ายวันนี้ครับ",
+      "visual": {
+        "card": {
+          "type": "cta",
+          "big": [
+            "ลูกค้า 10 รายใหญ่",
+            "คุยผ่าน LINE *ของใคร?*"
+          ],
+          "small": "ของคน = เริ่มย้ายเข้า OA บริษัทวันนี้",
+          "theme": "accent"
+        }
+      }
+    }
+  ],
+  "prompts": {
+    "empty-desk": {
+      "scene": "An empty office chair pushed back from a tidy sales desk, a desk phone ringing with small motion lines, a cardboard box of personal items on the chair. Single cool window light from the left."
+    },
+    "phone-vault": {
+      "scene": "A single smartphone standing upright like a bank vault door, slightly open, with dozens of tiny paper customer cards and receipts spilling out of it into a small paper hand that is carrying them away to the right. Single soft light from the upper left."
+    }
+  }
+}

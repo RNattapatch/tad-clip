@@ -1,0 +1,6 @@
+{
+  "drop": [4, 5, 16],
+  "gap": 0.3,
+  "drop_times": [[2.2, 4.65], [17.35, 18.95], [19.3, 19.5]],
+  "_": "drop_times = the moments tests/fixtures/README.md says a correct rough cut removes (first tries + a 0.1 s blip). smoke.py re-derives drop from drop_times against the phrases found on the machine, so a slightly different ffmpeg build cannot shift the numbers. drop = the phrase numbers measured on macOS."
+}

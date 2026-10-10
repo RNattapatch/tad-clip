@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tad-clip subtitle edits (edits.json)",
+  "description": "Written by Claude after reading review.md. Every cue number i refers to the numbering in review.md (the raw cues), never to a renumbered list. A cue can be touched by one entry only. If more than half of the cues are touched, finalize refuses (exit 3).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "corrections": {
+      "description": "Fix the wording of one cue. Timing is kept. from must equal the cue text exactly.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["i", "from", "to"],
+        "properties": {
+          "i": { "type": "integer", "minimum": 1, "description": "Cue number from review.md" },
+          "from": { "type": "string", "description": "Whole current line, character for character" },
+          "to": { "type": "string", "description": "Whole corrected line" },
+          "why": { "type": "string", "description": "Short reason, shown in edits-report.md" }
+        }
+      }
+    },
+    "resplit": {
+      "description": "Move the line break between adjacent cues (or split one cue). The spoken words must stay the same; only spaces and break positions may change.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["i", "to"],
+        "properties": {
+          "i": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 1 }, "description": "Consecutive cue numbers, ascending" },
+          "to": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "The new lines, in order" },
+          "why": { "type": "string" }
+        }
+      }
+    },
+    "drop": {
+      "description": "Remove a cue entirely, for example when the same words already sit on screen as burned-in text.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["i", "from"],
+        "properties": {
+          "i": { "type": "integer", "minimum": 1 },
+          "from": { "type": "string", "description": "Whole current line, character for character" },
+          "why": { "type": "string" }
+        }
+      }
+    },
+    "flags": {
+      "description": "Doubts that are not fixed. They go into edits-report.md for a human to decide.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["i", "note"],
+        "properties": {
+          "i": { "type": "integer", "minimum": 1 },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "notes": { "type": "string", "description": "One or two lines summarising the review" }
+  }
+}

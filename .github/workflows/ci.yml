@@ -1,0 +1,145 @@
+# Install the kit the way a user does, then unit tests + an end-to-end smoke render, on macOS and Windows.
+# macOS minutes bill at 10× → one job per OS (installer runs once), whisper `base`, caches for model + uv,
+# superseded runs cancelled, and only main pushes / manual runs trigger it.
+name: ci
+
+on:
+  push:
+    branches: [main, ci/task5]   # ci/task5: Task 5 iteration branch only
+  workflow_dispatch:
+    inputs:
+      os:
+        description: "Which OS to run"
+        type: choice
+        options: [both, macos, windows]
+        default: both
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TAD_CLIP_TEST_MODEL: base
+  TAD_CLIP_MODEL: base
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+defaults:
+  run:
+    shell: bash   # Git Bash on Windows — the same shell Claude Code's Bash tool uses there
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os == 'macos' && '["macos-14"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-14","windows-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Paths
+        run: |
+          tmp="$RUNNER_TEMP"
+          if [ "$RUNNER_OS" = "Windows" ]; then tmp="$(cygpath -m "$RUNNER_TEMP")"; fi
+          echo "TAD_CLIP_HOME=$tmp/tadclip" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$tmp/uv-cache" >> "$GITHUB_ENV"
+          echo "ARTIFACTS=$tmp/smoke-artifacts" >> "$GITHUB_ENV"
+
+      - name: Restore whisper model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/tadclip/models
+          key: whisper-base-${{ runner.os }}-v1
+
+      - name: Restore uv downloads
+        id: uv-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/uv-cache
+          key: uv-${{ runner.os }}-${{ hashFiles('engine/install/requirements*.txt') }}
+
+      - name: Install (macOS — system python3, Homebrew)
+        if: runner.os == 'macOS'
+        run: /usr/bin/python3 engine/install/setup.py --yes --model base
+
+      - name: Install (Windows — bootstrap uv, no system Python, no admin)
+        if: runner.os == 'Windows'
+        run: |
+          # identical to the bootstrap line in skills/tad-clip-setup/SKILL.md
+          powershell -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = 0; [Net.ServicePointManager]::SecurityProtocol = 3072; $h = $env:TAD_CLIP_HOME; if (-not $h) { $h = Join-Path $env:USERPROFILE .tad-clip }; $b = Join-Path $h bin; New-Item -ItemType Directory -Force -Path $b | Out-Null; $z = Join-Path $b uv.zip; Invoke-WebRequest -UseBasicParsing -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath $b; Remove-Item $z'
+          H="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+          "$H/bin/uv.exe" run --no-project --python 3.12 engine/install/setup.py --yes --model base
+
+      - name: Save whisper model
+        if: always() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/tadclip/models
+          key: whisper-base-${{ runner.os }}-v1
+
+      - name: Save uv downloads
+        if: always() && steps.uv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/uv-cache
+          key: uv-${{ runner.os }}-${{ hashFiles('engine/install/requirements*.txt') }}
+
+      - name: Tools
+        id: tools
+        run: |
+          PY="$TAD_CLIP_HOME/venv/bin/python"
+          [ -f "$PY" ] || PY="$TAD_CLIP_HOME/venv/Scripts/python.exe"
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          echo "NODE=$("$PY" -c "from engine import kit; print(kit.tool('node'))")" >> "$GITHUB_ENV"
+          mkdir -p "$ARTIFACTS"
+          "$PY" engine/doctor.py --json > "$ARTIFACTS/doctor.json" || true
+          "$PY" engine/doctor.py
+
+      - name: Unit tests (pytest)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: '"$PY" -m pytest -q -m "not network"'
+
+      - name: Unit tests (node)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: '"$NODE" --test "tests/*.test.mjs"'
+
+      - name: Probe — whisper model in a Thai + space folder (info only)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          "$PY" - <<'EOF'
+          import pathlib, shutil, tempfile
+          from engine import install as inst, kit
+          src = inst.model_dir("base", kit.models_dir())
+          dst = pathlib.Path(tempfile.mkdtemp()) / "โมเดล ทดสอบ"
+          shutil.copytree(src, dst)
+          from faster_whisper import WhisperModel
+          WhisperModel(str(dst), device="cpu", compute_type="int8")
+          print("OK: faster-whisper loads a model from", dst)
+          EOF
+
+      - name: Smoke (fixture → final.mp4)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: '"$PY" tests/smoke/smoke.py --artifacts "$ARTIFACTS"'
+
+      - name: Upload smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: ${{ runner.temp }}/smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7

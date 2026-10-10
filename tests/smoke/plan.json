@@ -1,0 +1,21 @@
+{
+  "title": "smoke test",
+  "fps": 30,
+  "out": "out",
+  "source_video": "roughcut.mp4",
+  "subs": "subs/roughcut.karaoke.ass",
+  "proof_exempt": "smoke test: no real proof material",
+  "shots": [
+    { "id": "01", "t": [0, 2.5], "layout": "full-speaker", "say": "hook",
+      "overlays": [{ "type": "hook-pill", "text": "ตัดคลิปเอง *ไม่ต้องเปิดโปรแกรม*", "y": 30 }] },
+    { "id": "02", "t": [2.5, 5], "layout": "full-card", "say": "title card",
+      "visual": { "card": { "type": "title", "lines": ["ตัดคลิป", "ทดสอบ", "ครบทุกขั้น"], "accent": 2 } } },
+    { "id": "03", "t": [5, 8], "layout": "cutout", "say": "cut-out (macOS only — smoke.py turns it into full-speaker on Windows)",
+      "mac_only": true, "visual": { "ai": "bg" },
+      "overlays": [{ "type": "label", "text": "ตัดพื้นหลังจริง", "x": 50, "y": 22 }] },
+    { "id": "04", "t": [8, 9], "layout": "full-speaker", "say": "rest of the clip (smoke.py stretches t[1] to the rough cut's end)" }
+  ],
+  "prompts": {
+    "bg": { "scene": "A plain studio backdrop with a soft grid pattern (smoke.py draws it with ffmpeg)." }
+  }
+}
