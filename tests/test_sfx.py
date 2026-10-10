@@ -1,6 +1,6 @@
 """sfx_mix: measured gain (-8 dB under the voice by default), video stream untouched, path resolution."""
-import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -34,15 +34,40 @@ def ff(*args):
     subprocess.run([FFMPEG, "-v", "error", "-y", *map(str, args)], check=True)
 
 
-def make_wav(path, freq, peak, dur=1.0):
-    """Mono sine whose peak amplitude is `peak` (full scale = 1.0)."""
-    ff("-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}:sample_rate={SR},volume={peak * 8}", "-ac", "1", "-c:a", "pcm_s16le", path)
+def make_wav(path, freq, peak, dur=1.0, channels=1):
+    """Sine whose peak amplitude is `peak` (full scale = 1.0); channels > 1 duplicates it into every channel."""
+    ff("-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}:sample_rate={SR},volume={peak * 8}", "-ac", channels, "-c:a", "pcm_s16le", path)
 
 
-def make_video(path, voice_expr="sine=frequency=220:sample_rate=44100:duration=4,volume=2", dur=4):
+def make_video(path, voice_expr="sine=frequency=220:sample_rate=44100:duration=4,volume=2", dur=4, channels=1):
     """Tiny H.264 clip whose 'voice' is a 220 Hz tone (default peak 0.25 -> RMS about -15 dBFS)."""
     ff("-f", "lavfi", "-i", f"color=c=black:s=160x284:r=30:d={dur}", "-f", "lavfi", "-i", voice_expr,
-       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-shortest", path)
+       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-ac", channels, "-shortest", path)
+
+
+def chan_pcm(path, ch=0):
+    """One channel of the file, decoded independently of the code under test."""
+    raw = subprocess.run([FFMPEG, "-v", "error", "-i", str(path), "-vn", "-af", f"pan=mono|c0=c{ch}", "-ar", str(SR), "-f", "s16le", "-"],
+                         capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.int16).astype(np.float32) / 32768
+
+
+def n_channels(path):
+    out = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True, check=True).stdout
+    return int(out.strip())
+
+
+def true_peak_db(path):
+    """True peak in dBFS exactly as `doctor --qc` measures it (ebur128 peak=true)."""
+    res = subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-i", str(path), "-vn", "-af", "ebur128=peak=true", "-f", "null", "-"],
+                         capture_output=True, text=True)
+    m = re.search(r"True peak:\s+Peak:\s+(-?\d+(?:\.\d+)?)\s+dBFS", res.stderr)
+    assert m, res.stderr[-400:]
+    return float(m.group(1))
+
+
+HOT_VOICE = "sine=frequency=1000:sample_rate=44100:duration=4,volume=7.92"   # peak 0.99 = -0.09 dBFS
 
 
 def vmd5(path):
@@ -87,6 +112,20 @@ def test_custom_db(tmp_path):
     make_wav(snd, 880, 0.05)
     sfx_mix.mix(video, write_spec(tmp_path / "sfx.json", [{"file": "s.wav", "at": 1.0, "db": -14}]), out)
     assert abs(rel_db(out, 1.2, 1.8, 880) - (-14.0)) < 1.0
+
+
+@pytest.mark.parametrize("voice_ch,fx_ch", [(1, 1), (1, 2), (2, 1), (2, 2)], ids=["mono-mono", "mono-voice-stereo-fx", "stereo-voice-mono-fx", "stereo-stereo"])
+def test_minus_8_db_on_every_output_channel_for_mono_and_stereo_mixes(tmp_path, voice_ch, fx_ch):
+    """A mono effect on a stereo voice used to land 3 dB low (upmix at -3 dB per channel)."""
+    video, snd, out = tmp_path / "v.mp4", tmp_path / "s.wav", tmp_path / "out.mp4"
+    make_video(video, channels=voice_ch)
+    make_wav(snd, 880, 0.3, channels=fx_ch)
+    sfx_mix.mix(video, write_spec(tmp_path / "sfx.json", [{"file": "s.wav", "at": 1.0}]), out)
+    assert n_channels(out) == voice_ch                           # the voice keeps its own layout
+    for ch in range(voice_ch):
+        x = chan_pcm(out, ch)[int(1.2 * SR):int(1.8 * SR)]
+        got = 20 * np.log10(tone_amp(x, 880) / tone_amp(x, 220))
+        assert abs(got - (-8.0)) < 1.0, f"channel {ch}: {got:.2f} dB"
 
 
 def test_video_stream_is_bit_exact_and_duration_kept(tmp_path):
@@ -170,11 +209,26 @@ def test_rerun_skips_unless_inputs_changed_or_force(tmp_path):
     assert out.stat().st_mtime_ns > stamp
 
 
-def test_empty_list_just_remuxes(tmp_path):
+def test_empty_list_still_runs_the_limiter(tmp_path):
+    """sfx_mix is the one place peak control lives: [] must not be a stream copy of the voice."""
     video, out = tmp_path / "v.mp4", tmp_path / "out.mp4"
-    make_video(video)
+    make_video(video, voice_expr=HOT_VOICE)
+    assert true_peak_db(video) > -0.5, "fixture must be hot enough to fail the QC limit"
     assert sfx_mix.mix(video, write_spec(tmp_path / "sfx.json", []), out) == []
-    assert out.exists() and vmd5(out) == vmd5(video)
+    assert out.exists() and vmd5(out) == vmd5(video)          # picture is still copied bit-exact
+    assert true_peak_db(out) <= -0.5
+
+
+def test_hot_voice_plus_effect_stays_under_the_qc_limit(tmp_path):
+    video, out = tmp_path / "v.mp4", tmp_path / "out.mp4"
+    make_video(video, voice_expr=HOT_VOICE)
+    make_wav(tmp_path / "s.wav", 440, 0.9)
+    sfx_mix.mix(video, write_spec(tmp_path / "sfx.json", [{"file": "s.wav", "at": 1.0, "db": -2}]), out)
+    assert true_peak_db(out) <= -0.5
+
+
+def test_limiter_ceiling_is_0_89():
+    assert sfx_mix.LIMIT == 0.89                                # measured: -1.0 dBTP after AAC, clear of the -0.5 dBTP QC limit
 
 
 def test_cli_with_thai_and_spaces_in_paths(tmp_path):
@@ -190,7 +244,7 @@ def test_cli_with_thai_and_spaces_in_paths(tmp_path):
     res = subprocess.run([sys.executable, "-m", "engine.sfx_mix", str(video), str(spec), str(out)],
                          cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
     assert res.returncode == 0, res.stderr
-    assert "1 sound effects" in res.stdout or "1 เสียง" in res.stdout
+    assert "1 เสียงเอฟเฟกต์" in res.stdout
     assert vmd5(out) == vmd5(video)
     probe = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(out)],
                            capture_output=True, text=True, check=True).stdout
@@ -203,3 +257,15 @@ def test_cli_error_is_thai_and_exit_1(tmp_path):
     assert res.returncode == 1
     assert "ไม่พบ" in res.stderr
     assert "Traceback" not in res.stderr
+
+
+def test_cli_unwritable_output_is_thai_not_a_traceback(tmp_path):
+    video = tmp_path / "v.mp4"
+    make_video(video)
+    spec = write_spec(tmp_path / "sfx.json", [{"file": str(BEEP), "at": 0.5}])
+    blocker = tmp_path / "ไฟล์ ขวาง"
+    blocker.write_text("x")                                    # a file where the output folder should be
+    res = subprocess.run([sys.executable, "-m", "engine.sfx_mix", str(video), str(spec), str(blocker / "out.mp4")],
+                         cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+    assert res.returncode == 1 and "Traceback" not in res.stderr
+    assert "เขียนไฟล์ไม่ได้" in res.stderr

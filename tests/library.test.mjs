@@ -290,8 +290,54 @@ test('SKILL.md: frontmatter, triggers, engine paths and fallback line', () => {
 test('SKILL.md: the sourcing rules are all there and no owner-specific strings leak', () => {
   const skill = readSkill();
   for (const must of ['หาให้เลยไม่ต้องถาม', 'CREDITS.md', 'ใช้ยิงแอดได้', 'ภาพจำลอง', 'Wikimedia Commons', 'Pexels', 'yt-dlp', 'ลายน้ำ', 'ตัวเลข']) assert.ok(skill.includes(must), must);
-  assert.ok(!skill.includes('คอร์ส'), 'use คลาส');
-  for (const bad of ['ปัน', 'Pun', 'agentmacmini', '100.64.172.7', '~/Documents/content', 'Telegram', 'Codex', 'kie', '.hermes']) {
-    assert.ok(!skill.includes(bad), `owner-specific string "${bad}" must not appear`);
+  // built at runtime so a repo-wide grep for the owner strings stays clean (this file is not allowed to contain them as literals)
+  const banned = [['ป', 'ัน'], ['P', 'un'], ['agent', 'macmini'], ['100.64', '.172.7'], ['~/Documents', '/content'], ['Tele', 'gram'], ['Co', 'dex'], ['k', 'ie'], ['.her', 'mes'], ['คอ', 'ร์ส']].map(p => p.join(''));
+  for (const bad of banned) assert.ok(!skill.includes(bad), `owner-specific string "${bad}" must not appear`);
+});
+
+// The Bash tool forgets variables AND shell functions between calls: every block must be self-contained.
+const ENV_LINE = 'K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"';
+const bashBlocks = skill => [...skill.matchAll(/^([ \t]*)```bash\n([\s\S]*?)^\1```/gm)]
+  .map(m => m[2].split('\n').map(l => (l.startsWith(m[1]) ? l.slice(m[1].length) : l)).filter((l, i, a) => i < a.length - 1 || l !== ''));
+
+test('SKILL.md: every bash block starts with the env.sh line and is self-contained', () => {
+  const skill = readSkill();
+  const blocks = bashBlocks(skill);
+  assert.ok(blocks.length >= 12, `expected the commands to live in blocks, found ${blocks.length}`);
+  for (const lines of blocks) {
+    assert.equal(lines[0], ENV_LINE, `block must start with the env.sh line:\n${lines.join('\n')}`);
+    const body = lines.join('\n');
+    if (body.includes('$W')) assert.match(lines[1], /^W="<[^"]+>[^"]*"/, `a block that uses $W sets it on the second line:\n${body}`);
+    assert.doesNotMatch(body, /\(cd "\$KIT"|\bLIB\b|\bFETCH\b|command -v node|FF="\$\(/, `old preamble leftovers:\n${body}`);
   }
+  assert.doesNotMatch(skill, /\bLIB\b|\bFETCH\b/, 'shell functions do not survive between Bash calls: write the commands out');
+  assert.ok(skill.includes('ถ้า `${CLAUDE_PLUGIN_ROOT}` ไม่ถูกแทนค่า ให้ใช้ `~/.tad-clip/kit`'));
+  assert.match(skill, /path เต็ม/, 'tells Claude that user files must be absolute paths (env.sh cds into the kit)');
+});
+
+test('SKILL.md: ffmpeg always goes through "$FF" (set by env.sh), never a bare PATH lookup', () => {
+  const skill = readSkill();
+  assert.doesNotMatch(skill.replaceAll('"$FF"', ''), /\bffmpeg\s+-/, 'every ffmpeg call must go through "$FF"');
+  assert.ok(bashBlocks(skill).filter(l => l.join('\n').includes('"$FF"')).length >= 3);
+});
+
+test('SKILL.md: W (the clip work folder) is explained, python modules and node scripts are written out, numbering is unambiguous', () => {
+  const skill = readSkill();
+  assert.match(skill, /tad-clip-<ชื่อ/, 'says what W is');
+  assert.match(skill, /ตามลำพัง[^\n]*ถามผู้ใช้|ถามผู้ใช้[^\n]*ตามลำพัง/, 'standalone use asks which clip/folder first');
+  const all = bashBlocks(skill).map(l => l.join('\n')).join('\n');
+  for (const cmd of ['"$NODE" engine/library.mjs index', '"$NODE" engine/library.mjs sheet', '"$NODE" engine/library.mjs tag', '"$NODE" engine/library.mjs search',
+    '"$PY" -m engine.fetch gif2clip', '"$PY" -m engine.fetch commons', '"$PY" -m engine.fetch ytsearch', '"$PY" -m engine.fetch video', '"$PY" -m engine.fetch image',
+    '"$PY" -m engine.fetch credit ', '"$PY" -m engine.fetch credits-summary', '"$PY" -m engine.sfx_mix', '"$PY" -m engine.asr transcribe']) {
+    assert.ok(all.includes(cmd), `missing written-out command: ${cmd}`);
+  }
+  assert.doesNotMatch(skill, /ขั้น \d|ข้อ \d/, 'no "ข้อ 3" vs "ขั้น 3" ambiguity');
+  assert.match(skill, /ค้นเจอจากชื่อไฟล์/, 'untagged items still match by file name');
+  assert.doesNotMatch(skill, /ยังไม่แท็กจะไม่ถูกเสนอ/);
+});
+
+test('SKILL.md: sfx_mix is always called, even with no effects, because it owns peak control', () => {
+  const skill = readSkill();
+  assert.match(skill, /sfx\.json[^\n]*\[\][^\n]*limiter|\[\][^\n]*sfx_mix|ไม่มีเอฟเฟกต์[^\n]*\[\]/);
+  assert.doesNotMatch(skill, /copy `preview-composite-subs\.mp4`/);
 });

@@ -175,9 +175,51 @@ def test_fix_edges_moves_hanging_joiner_to_next_cue():
     assert ["".join(w["t"] for w in g) for g in groups] == ["ตอนนั้น", "ที่จะทำแคมเปญ"]
 
 
-def test_is_dangle_sees_compound_joiners():
-    assert make_subs.is_dangle("จะ") and make_subs.is_dangle("ที่จะ") and make_subs.is_dangle(" และก็ ")
-    assert not make_subs.is_dangle("แคมเปญ") and not make_subs.is_dangle("") and not make_subs.is_dangle("ที่คุณ")
+def test_is_dangle_matches_exact_joiner_tokens_only():
+    assert make_subs.is_dangle("จะ") and make_subs.is_dangle(" และ ") and make_subs.is_dangle("ได้")
+    # compounds end sentences all the time; they are not joiners
+    for word in ("ที่จะ", "ไปแล้ว", "ทำได้", "ไม่มี", "ไม่ได้", "ได้แล้ว", "เป็นไปได้", "ก็ได้", "แคมเปญ", ""):
+        assert not make_subs.is_dangle(word), word
+
+
+def test_fix_edges_never_moves_a_word_across_a_real_pause():
+    # "ได้" ends the sentence, 700 ms of silence, then a new sentence
+    groups = [[_w("เราเริ่มใช้งานจริง", 0, 1500), _w("ได้", 1500, 1700)], [_w("ลูกค้า", 2400, 2800), _w("ถามราคา", 2800, 3300)]]
+    make_subs._fix_edges(groups, 22)
+    assert ["".join(w["t"] for w in g) for g in groups] == ["เราเริ่มใช้งานจริงได้", "ลูกค้าถามราคา"]
+
+
+def test_fix_edges_pause_limit_is_the_gap_constant():
+    def run(pause):
+        groups = [[_w("ตอนนั้น", 0, 600), _w("จะ", 600, 800)], [_w("ทำ", 800 + pause, 1000 + pause), _w("แคมเปญ", 1000 + pause, 1500 + pause)]]
+        make_subs._fix_edges(groups, 22)
+        return ["".join(w["t"] for w in g) for g in groups]
+    assert run(make_subs.GAP - 1) == ["ตอนนั้น", "จะทำแคมเปญ"]              # a breath shorter than GAP: still hanging, so it moves
+    assert run(make_subs.GAP) == ["ตอนนั้นจะ", "ทำแคมเปญ"]                  # GAP or longer: a real stop, leave it
+
+
+def test_fix_edges_does_not_split_a_compound_sentence_ending():
+    for end in ("ไปแล้ว", "ทำได้", "ไม่มี", "ไม่ได้", "ได้แล้ว", "เป็นไปได้", "ก็ได้"):
+        groups = [[_w("เรื่องนี้", 0, 500), _w(end, 500, 900)], [_w("ลูกค้า", 900, 1300), _w("ถามราคา", 1300, 1800)]]
+        make_subs._fix_edges(groups, 22)
+        assert ["".join(w["t"] for w in g) for g in groups] == ["เรื่องนี้" + end, "ลูกค้าถามราคา"], end
+
+
+def test_sentences_separated_by_pauses_keep_their_last_word():
+    from pythainlp.tokenize import word_tokenize
+    sents = ["เราเริ่มใช้งานจริงได้", "ลูกค้าถามราคา", "ทีมงานตอบทันที", "เราปิดการขายได้", "ลูกค้ากลับมาซื้อซ้ำ", "ทุกคนพอใจมาก"]
+    toks, t = [], 0
+    for sent in sents:
+        for w in word_tokenize(sent, engine="newmm"):
+            toks.append({"text": w, "offsets": {"from": t, "to": t + 90 * len(w)}})
+            t += 90 * len(w)
+        t += 700                                                     # a real pause between sentences
+    asr = {"transcription": [{"offsets": {"from": 0, "to": t}, "text": "".join(sents), "tokens": toks}]}
+    cues, _ = make_subs.build_cues(asr, make_subs.load_glossary({}), 22)
+    texts = [c["t"] for c in cues]
+    assert "เราเริ่มใช้งานจริงได้" in texts and "เราปิดการขายได้" in texts
+    assert not any(t.startswith("ได้") for t in texts), texts
+    assert "".join(texts) == "".join(sents)
 
 
 def test_fix_edges_leaves_joiner_when_next_cue_is_full():
@@ -202,7 +244,7 @@ def test_real_large_v3_clip_cues():
         last = [w["t"].strip() for w in c["words"] if w["t"].strip()][-1]
         assert not make_subs.is_dangle(last), c["t"]
         assert make_subs.cue_tokens(c) is not None
-    assert any("ที่จะทำแคมเปญ" in t for t in texts)                  # the joiner moved, not dropped
+    assert any(t.endswith("ที่จะ") for t in texts) and not any(t.startswith("จะ") for t in texts)   # "ที่จะ" is never torn apart
     assert "".join(texts).replace(" ", "").startswith("เพื่อแก้ไขวิกฤตจากกระทะสีดำ")
     assert [c["f"] for c in cues] == sorted(c["f"] for c in cues)
 
@@ -222,6 +264,19 @@ def test_glossary_fix_applied():
 def test_glossary_glue_keeps_phrase_in_one_cue():
     cues, _ = build(22)
     assert any("Claude Code" in c["t"] for c in cues)         # never split across two cues
+
+
+def test_cue_end_never_runs_into_the_next_cue():
+    # two short words 120 ms apart: the 200 ms floor on a cue's length must not push it past the next cue's start
+    asr = {"transcription": [
+        {"offsets": {"from": 1000, "to": 1100}, "text": "ก", "tokens": [{"text": "ก", "offsets": {"from": 1000, "to": 1100}}]},
+        {"offsets": {"from": 1120, "to": 1220}, "text": "ข", "tokens": [{"text": "ข", "offsets": {"from": 1120, "to": 1220}}]},
+        {"offsets": {"from": 5000, "to": 5400}, "text": "ค", "tokens": [{"text": "ค", "offsets": {"from": 5000, "to": 5400}}]}]}
+    cues, _ = make_subs.build_cues(asr, make_subs.load_glossary({}), 22)
+    assert [c["t"] for c in cues] == ["ก", "ข", "ค"]
+    for a, b in zip(cues, cues[1:]):
+        assert a["to"] <= b["f"], (a, b)
+        assert a["f"] < a["to"]
 
 
 def test_lead_shift_applied():
@@ -300,10 +355,38 @@ def test_glossary_merge_user_wins_and_hint_joins():
     assert make_subs.load_glossary({"prompt_hint": ""})["prompt_hint"] == base["prompt_hint"]
 
 
+def test_base_prompt_hint_is_mostly_thai():
+    """A Latin-only prompt pulls Whisper out of Thai, so the hint is a Thai sentence with a few tool names."""
+    hint = make_subs.load_glossary({})["prompt_hint"]
+    thai = len(re.findall(r"[\u0e00-\u0e7f]", hint))
+    latin = len(re.findall(r"[A-Za-z]", hint))
+    assert thai >= 2 * latin, (thai, latin)
+    assert re.match(r"[\u0e00-\u0e7f]", hint)                       # opens in Thai
+    assert len(hint) < 160                                          # a short hint, not a word list
+    assert "Claude Code" in hint
+
+
+def _owner_strings():
+    """The owner-specific literals that must never ship. Built at runtime so this file does not contain them
+    (a repo-wide grep for them has to come back clean)."""
+    return ["\u0e1b\u0e31\u0e19",                       # the owner's first name in Thai
+            "P" + "un",
+            "agent" + "macmini",
+            "100.64." + "172.7",
+            "Documents/" + "content",
+            "Tele" + "gram",
+            "Co" + "dex",
+            ".her" + "mes"]
+
+
+def _celebrity_and_tool_names():
+    return ["Fed" + "erer", "Jor" + "dan", "Nis" + "sin", "Dy" + "son", "Patago" + "nia", "Mac " + "mini",
+            "Future" + "Skill", "Supa" + "base", "Cloud" + "flare", "\u0e13\u0e31\u0e10\u0e1e\u0e31\u0e0a\u0e23\u0e4c"]
+
+
 def test_base_glossary_has_no_owner_entries():
     text = (ROOT / "engine" / "subs" / "glossary-base.json").read_text(encoding="utf-8")
-    for bad in ("ปัน", "ณัฐพัชร์", "Federer", "Jordan", "Nissin", "Dyson", "Patagonia", "Codex", "Mac mini",
-                "FutureSkill", "Supabase", "Cloudflare", "agentmacmini"):
+    for bad in _owner_strings() + _celebrity_and_tool_names():
         assert bad not in text, bad
     g = json.loads(text)
     assert g["prompt_hint"] and g["fixes"] and all(len(f) == 2 for f in g["fixes"])
@@ -313,13 +396,13 @@ def test_no_owner_strings_in_task_files():
     files = [ROOT / "engine" / "subs" / n for n in
              ("__init__.py", "__main__.py", "make_subs.py", "resplit.py", "apply_edits.py",
               "glossary-base.json", "edits.schema.json")]
-    files += [ROOT / "skills" / "tad-clip-subs" / "SKILL.md", FIX / "asr-mini.json"]
-    forbidden = ["ปัน", "Pun", "agentmacmini", "100.64.172.7", "Documents/content", "Telegram", "Codex", ".hermes"]
+    files += [ROOT / "skills" / "tad-clip-subs" / "SKILL.md", FIX / "asr-mini.json", FIX / "asr-large-v3-clip.json",
+              Path(__file__)]
     for f in files:
         text = f.read_text(encoding="utf-8")
-        for bad in forbidden:
+        for bad in _owner_strings():
             assert bad not in text, f"{bad!r} in {f.name}"
-        assert not re.search(r"\bkie\b", text, re.I), f.name
+        assert not re.search(r"\b" + "k" + "ie" + r"\b", text, re.I), f.name
 
 
 # ── review.md ──────────────────────────────────────────────────────────────────────────────
@@ -545,6 +628,18 @@ def test_resplit_moves_a_break_and_keeps_spans(tmp_path):
     assert r"{\k" in (d / "demo.karaoke.ass").read_text(encoding="utf-8")
 
 
+def test_resplit_never_gives_the_last_piece_a_negative_duration():
+    # the words sit far later than the cue's own span (the cue end was clamped earlier), so the break lands after the end
+    cue = {"t": "กขคง", "f": 0, "to": 300,
+           "words": [{"t": "ก", "f": 0, "to": 100}, {"t": "ข", "f": 100, "to": 200},
+                     {"t": "ค", "f": 1000, "to": 1100}, {"t": "ง", "f": 1100, "to": 1200}]}
+    out = resplit.resplit_group([cue], ["กข", "คง"])
+    assert (out[0]["f"], out[-1]["to"]) == (0, 300)
+    for c in out:
+        assert c["to"] > c["f"], out
+    assert out[0]["to"] == out[1]["f"]
+
+
 def test_resplit_rejects_changed_wording():
     cues = [{"t": "สวัสดีครับ", "f": 0, "to": 900, "words": [{"t": "สวัสดี", "f": 0, "to": 600}, {"t": "ครับ", "f": 600, "to": 900}]},
             {"t": "ยินดีที่ได้รู้จัก", "f": 900, "to": 2000, "words": [{"t": "ยินดี", "f": 900, "to": 1300}, {"t": "ที่ได้รู้จัก", "f": 1300, "to": 2000}]}]
@@ -638,6 +733,30 @@ def test_rerun_skips_done_steps_and_never_touches_edits(tmp_path, fake_asr):
     assert cli.main([str(video), "-o", str(out), "--force"]) == 0
     assert len(fake_asr) == 2
     assert (out / "edits.json").read_bytes() == before
+
+
+@needs_ffmpeg
+def test_rerun_after_asr_json_was_deleted_rebuilds_the_raw_cues(tmp_path, monkeypatch):
+    video = tmp_path / "v.mp4"
+    shutil.copy(VIDEO, video)
+    out = tmp_path / "out"
+    asr_versions = [mini(), mini()]
+    asr_versions[1]["transcription"] = asr_versions[1]["transcription"][-2:]          # the second run hears less
+    monkeypatch.setattr(cli, "_transcribe", lambda wav, prompt=None: asr_versions.pop(0))
+    cli.main([str(video), "-o", str(out)])
+    before = [c["t"] for c in raw_cues(out)]
+    (out / "asr.json").unlink()
+    cli.main([str(video), "-o", str(out)])
+    after = [c["t"] for c in raw_cues(out)]
+    assert after != before and len(after) < len(before)
+    assert "".join(after).startswith("ซับ")                                           # cues now come from the new asr.json
+
+
+def test_build_raw_without_asr_json_is_a_clear_error(tmp_path):
+    (tmp_path / "x").mkdir()
+    with pytest.raises(kit.KitError) as e:
+        cli.build_raw(tmp_path / "x", name="x")
+    assert "asr.json" in str(e.value)
 
 
 @needs_ffmpeg
@@ -823,8 +942,19 @@ def test_real_asr_sample_properties():
     assert r"{\k" in ass
 
 
+PREAMBLE = 'K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"'
+
+
+def _skill_text():
+    return (ROOT / "skills" / "tad-clip-subs" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def _bash_blocks(text):
+    return re.findall(r"```bash\n(.*?)```", text, re.S)
+
+
 def test_skill_frontmatter_and_required_lines():
-    text = (ROOT / "skills" / "tad-clip-subs" / "SKILL.md").read_text(encoding="utf-8")
+    text = _skill_text()
     head = text.split("---")[1]
     assert re.search(r"^name: tad-clip-subs$", head, re.M)
     desc = re.search(r"^description: (.+)$", head, re.M).group(1)
@@ -835,6 +965,28 @@ def test_skill_frontmatter_and_required_lines():
     assert "~/.tad-clip/venv/bin/python" in text and r"%USERPROFILE%\.tad-clip\venv\Scripts\python.exe" in text
     for cmd in ("-m engine.subs", "finalize", "patch", "burn", "edits.schema.json"):
         assert cmd in text
+    assert "path ของไฟล์ผู้ใช้ต้องเป็น path เต็ม" in text           # the preamble cd's into the kit
+
+
+def test_every_skill_bash_block_starts_with_the_shared_preamble():
+    blocks = _bash_blocks(_skill_text())
+    assert len(blocks) >= 5
+    for b in blocks:
+        lines = b.splitlines()
+        assert lines[0].strip() == PREAMBLE, b
+        if "$W" in "\n".join(lines[1:]):                            # a snippet that needs the work folder fills it in on line 2
+            assert lines[1].lstrip().startswith('W="<'), b
+
+
+def test_skill_commands_use_the_preamble_variables_not_bare_tools():
+    text = _skill_text()
+    assert "node ${CLAUDE_PLUGIN_ROOT}" not in text
+    for b in _bash_blocks(text):
+        body = "\n".join(b.splitlines()[1:])
+        assert not re.search(r"(^|[\s;&|])(python3?|node|ffmpeg)\s", body, re.M), body
+        assert "-m engine.subs" not in body or '"$PY" -m engine.subs' in body
+    assert '"$NODE" "$KIT/engine/visual/thv.mjs" subs' in text
+    assert '"$FF"' in text
 
 
 def test_schema_file_is_valid_json_and_matches_shape():

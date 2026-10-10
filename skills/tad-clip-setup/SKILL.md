@@ -15,33 +15,41 @@ skill นี้มี 3 งาน เลือกตามที่ผู้ใ�
 ผู้ใช้ส่วนใหญ่ไม่เคยเขียนโค้ด พูดกับเขาเป็นภาษาไทยสั้นๆ บอกว่ากำลังทำอะไรและรออีกนานไหม ไม่ต้องอธิบายคำสั่ง
 งานติดตั้งทุกอย่างคุณรันเองใน Bash ผู้ใช้ไม่ต้องพิมพ์อะไร ยกเว้นตอนติดตั้ง Homebrew บน Mac (ต้องใช้รหัสผ่านเครื่อง)
 
-## 0. ตัวแปรที่ใช้ทุกครั้ง
+## 0. บรรทัดแรกของทุกคำสั่ง
 
-ทุกคำสั่งรันใน Bash (บน Windows คือ Git Bash ที่มากับ Claude Code ไวยากรณ์เดียวกัน) เริ่มด้วย:
+Bash ลืมตัวแปรทุกครั้งที่เรียกใหม่ (บน Windows คือ Git Bash ที่มากับ Claude Code ไวยากรณ์เดียวกัน) เลยต้องขึ้นต้นทุกบล็อกแบบนี้
+
+หลังติดตั้งแล้ว (ข้อ B C D และขั้นตรวจท้ายข้อ A):
 
 ```bash
-KIT="${CLAUDE_PLUGIN_ROOT}"; [ -d "$KIT/engine" ] || KIT="$HOME/.tad-clip/kit"
-TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
-PY="$TC_HOME/venv/bin/python"; [ -x "$PY" ] || PY="$TC_HOME/venv/Scripts/python.exe"
-case "$(uname -s)" in Darwin) OS=mac ;; MINGW*|MSYS*|CYGWIN*) OS=windows ;; *) OS=other ;; esac
-echo "$OS · kit $KIT · home $TC_HOME"
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 ```
 
-ถ้า `${CLAUDE_PLUGIN_ROOT}` ไม่ถูกแทนค่า ให้ใช้ `~/.tad-clip/kit` (บรรทัดแรกจัดการให้แล้ว)
-ถ้า `OS=other` ให้บอกผู้ใช้ตรงๆ ว่า tad-clip รองรับแค่ macOS กับ Windows 10/11 แบบ 64 บิต แล้วหยุด
+บรรทัดนี้ตั้ง `KIT` (และ cd เข้าไป) `TC_HOME` `PY` (Python ของ kit) `FF` (ffmpeg) `NODE` ให้ · path ไฟล์ของผู้ใช้ต้องเป็นแบบเต็มเสมอ
+ถ้า `${CLAUDE_PLUGIN_ROOT}` ไม่ถูกแทนค่า ให้ใช้ `~/.tad-clip/kit` (บรรทัดนี้จัดการให้แล้ว)
+อย่าเรียก `ffmpeg` หรือ `node` ตรงๆ ให้ใช้ `"$FF"` `"$NODE"` `"$PY"` เสมอ
+
+ก่อนติดตั้ง (ข้อ A1 กับ A3 เท่านั้น ตอนนั้นยังไม่มี Python ของ kit) ใช้บรรทัดสั้นกว่าที่ไม่โหลด env.sh:
+
+```bash
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+case "$(uname -s)" in Darwin) echo mac ;; MINGW*|MSYS*|CYGWIN*) echo windows ;; *) echo other ;; esac
+```
+
+ถ้าได้ `other` ให้บอกผู้ใช้ตรงๆ ว่า tad-clip รองรับแค่ macOS กับ Windows 10/11 แบบ 64 บิต แล้วหยุด
 
 ## A. ติดตั้งครั้งแรก
 
 ### A1. ดูว่าเครื่องนี้ต้องลงอะไรบ้าง (ยังไม่ติดตั้ง)
 
-Mac:
+Mac เช็ค Homebrew ก่อน:
 
 ```bash
-command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null
-python3 "$KIT/engine/install/setup.py"
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null || echo "NO BREW"
 ```
 
-ถ้าไม่เจอ `brew` เลย ให้หยุดตรงนี้แล้วบอกผู้ใช้ประมาณนี้ (คุณติดตั้งให้ไม่ได้ เพราะต้องพิมพ์รหัสผ่านเครื่อง):
+ถ้าขึ้น `NO BREW` ให้หยุดตรงนี้แล้วบอกผู้ใช้ประมาณนี้ (คุณติดตั้งให้ไม่ได้ เพราะต้องพิมพ์รหัสผ่านเครื่อง):
 
 > เครื่องนี้ยังไม่มี Homebrew ซึ่งเป็นตัวติดตั้งโปรแกรมของ Mac ขอให้ทำ 3 ขั้นนี้ครับ
 > 1. กด Cmd+Space พิมพ์ Terminal แล้วกด Enter
@@ -50,34 +58,44 @@ python3 "$KIT/engine/install/setup.py"
 >
 > เสร็จแล้วพิมพ์บอกผมว่า "ติดตั้ง tad-clip ต่อ"
 
+เจอ brew แล้วค่อยดูรายการ:
+
+```bash
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+python3 "$K/engine/install/setup.py"
+```
+
 Windows (โหลด uv ตัวเดียวก่อน ~20 MB ไม่ต้องมี Python ในเครื่อง ไม่ต้องใช้สิทธิ์ admin):
 
 ```bash
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
 powershell -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = 0; [Net.ServicePointManager]::SecurityProtocol = 3072; $h = $env:TAD_CLIP_HOME; if (-not $h) { $h = Join-Path $env:USERPROFILE .tad-clip }; $b = Join-Path $h bin; New-Item -ItemType Directory -Force -Path $b | Out-Null; $z = Join-Path $b uv.zip; Invoke-WebRequest -UseBasicParsing -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath $b; Remove-Item $z'
-UV="$TC_HOME/bin/uv.exe"
-"$UV" run --no-project --python 3.12 "$KIT/engine/install/setup.py"
+"$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py"
 nvidia-smi -L 2>/dev/null || echo "no NVIDIA"
 ```
 
 คำสั่ง setup ที่ไม่มี `--yes` จะพิมพ์รายการที่ต้องลง ขนาด และพื้นที่ว่าง แล้วหยุดโดยไม่ติดตั้งอะไร
 เอารายการนั้นมาเล่าให้ผู้ใช้ฟังเป็นภาษาง่ายๆ ตัวอย่าง:
 
-> จะลงโปรแกรมฟรี 5 อย่าง ใช้พื้นที่ราว 5 GB (เครื่องคุณว่าง 120 GB)
+> จะลงโปรแกรมฟรี 6 อย่าง ใช้พื้นที่ราว 5 GB (เครื่องคุณว่าง 120 GB)
 > - ffmpeg สำหรับตัดต่อและฝังซับ
 > - Node.js สำหรับวาดการ์ดข้อความ
 > - Python กับตัวถอดเสียงภาษาไทย (faster-whisper)
 > - โมเดลถอดเสียง large-v3 ขนาด 3 GB (โหลดครั้งเดียว หลังจากนั้นถอดเสียงได้แม้ไม่ต่อเน็ต)
 > - yt-dlp สำหรับโหลดคลิปจากเว็บมาแทรก
+> - เบราว์เซอร์ขนาดเล็กสำหรับวาดการ์ด (Mac) หรือใช้ Edge ที่มีอยู่แล้ว (Windows)
 >
 > ใช้เวลาประมาณ 10–30 นาที ขึ้นกับเน็ต ไม่ต้องจ่ายอะไร ไม่ต้องสมัครอะไรเพิ่ม
 
+Windows ที่มีการ์ดจอ NVIDIA จะมีบรรทัด "ไลบรารี CUDA" เพิ่ม (~1.5 GB) ให้ถอดเสียงเร็วขึ้น setup ลองถอดเสียงสั้นๆ ด้วยการ์ดจอให้ ถ้าไม่ผ่านจะตั้งให้ใช้ CPU เอง ผู้ใช้ไม่ต้องทำอะไร
+ถ้าผู้ใช้ไม่อยากโหลดส่วนนี้ ให้เติม `--no-cuda`
 ถ้าพื้นที่ไม่พอ setup จะบอกเอง ให้ผู้ใช้ลบไฟล์ก่อนแล้วค่อยทำต่อ
 
 ### A2. ถามก่อนเริ่ม (AskUserQuestion ครั้งเดียว)
 
 1. เริ่มติดตั้งเลยไหม: "ติดตั้งเลย" / "ยังก่อน"
-2. โมเดลถอดเสียง: "large-v3 แม่นสุด 3 GB (แนะนำ)" / "large-v3-turbo เร็วกว่า 1.6 GB (เครื่อง RAM 8 GB หรือเครื่องช้า)"
-   setup เลือก turbo ให้เองถ้า RAM น้อยกว่า 8 GB · ถ้าผู้ใช้เลือกเองให้ใส่ `--model <ชื่อ>`
+2. โมเดลถอดเสียง: "large-v3 แม่นสุด 3 GB (แนะนำ)" / "medium เบากว่า 1.5 GB (เครื่อง RAM น้อยกว่า 8 GB)"
+   setup เลือก medium ให้เองถ้า RAM น้อยกว่า 8 GB · ถ้าผู้ใช้เลือกเองให้ใส่ `--model <ชื่อ>`
 3. เฉพาะ Windows: ตัวตัดพื้นหลังคน (ไม่บังคับ) ใช้กับช็อตแบบ cutout ที่ตัวผู้พูดลอยอยู่บนภาพ
    - เจอการ์ดจอ NVIDIA (`nvidia-smi` บอกชื่อรุ่น) → "ติดตั้งเพิ่ม ราว 5 GB ใช้การ์ดจอ เร็ว" / "ไม่เอา"
    - ไม่เจอ → "ติดตั้งเพิ่ม ราว 2 GB ใช้ CPU ได้ผลเท่ากันแต่ช้ามาก ช็อตสั้นๆ ก็หลายนาที" / "ไม่เอา (แนะนำ)"
@@ -91,16 +109,18 @@ nvidia-smi -L 2>/dev/null || echo "no NVIDIA"
 Mac:
 
 ```bash
-python3 "$KIT/engine/install/setup.py" --yes
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+python3 "$K/engine/install/setup.py" --yes
 ```
 
 Windows (ใส่ `--with-cutout` เฉพาะเมื่อผู้ใช้ตอบว่าเอา):
 
 ```bash
-"$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$KIT/engine/install/setup.py" --yes
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+"$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py" --yes
 ```
 
-ต่อท้าย `--model large-v3-turbo` ถ้าผู้ใช้เลือก turbo
+ต่อท้าย `--model medium` ถ้าผู้ใช้เลือก medium
 
 setup ทำ 5 ขั้นตามลำดับ `[1/5]` ถึง `[5/5]` บอกผู้ใช้สั้นๆ เมื่อขึ้นขั้นใหม่ ขั้น 4 (โหลดโมเดล) นานที่สุด
 บรรทัดท้ายสุดเป็นตารางตรวจเครื่อง `ผล: พร้อมใช้ ✅` แปลว่าเสร็จ
@@ -110,7 +130,7 @@ setup ทำ 5 ขั้นตามลำดับ `[1/5]` ถึง `[5/5]` �
 - ไม่มี Homebrew → ให้ผู้ใช้ทำ 3 ขั้นใน A1
 - เน็ตหลุดตอนโหลดโมเดล → รันซ้ำได้เลย
 - Windows: yt-dlp ถูกโปรแกรมกันไวรัสกักไว้ → ให้ผู้ใช้กด "อนุญาต" ในหน้าต่างแจ้งเตือนของ Windows Security แล้วรันซ้ำ
-- Mac: เบราว์เซอร์ Google Chrome เปิดแบบซ่อนหน้าจอไม่ได้ (เช่นเครื่องที่ไม่ได้ต่อจอ) → setup ข้ามไปโหลด chrome-headless-shell ให้เอง ไม่ต้องทำอะไร
+- เบราว์เซอร์วาดการ์ดเปิดไม่ขึ้น → setup ลองตัวถัดไปเอง (Mac ใช้ chrome-headless-shell ที่โหลดมา ถ้าโหลดไม่ได้ใช้ Google Chrome · Windows ใช้ Edge ถ้าเปิดไม่ได้โหลด chrome-headless-shell) ไม่ต้องทำอะไร
 - Mac: ไม่มี swiftc (ใช้ตัดพื้นหลังคน) → `xcode-select --install` จะมีหน้าต่างให้ผู้ใช้กดติดตั้ง
 
 ## B. ตั้งค่าของผู้ใช้ (ถามระหว่างรอ A3)
@@ -155,16 +175,18 @@ setup ทำ 5 ขั้นตามลำดับ `[1/5]` ถึง `[5/5]` �
 เขียนเสร็จแล้วตรวจว่าไฟล์ยังอ่านได้ และสีออกมาตามที่เลือก:
 
 ```bash
-cd "$KIT" && "$PY" -c "from engine import kit; c = kit.load_config(); print(c['speaker'], c['brand']['preset'], c['brand']['colors']['accent'], c['output']['preset'])"
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
+"$PY" -c "from engine import kit; c = kit.load_config(); print(c['speaker'], c['brand']['preset'], c['brand']['colors']['accent'], c['output']['preset'])"
 ```
 
 ## C. ตรวจเครื่อง
 
 ```bash
-if [ -x "$PY" ]; then cd "$KIT" && "$PY" engine/doctor.py
-elif [ "$OS" = mac ]; then python3 "$KIT/engine/doctor.py"
-else "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$KIT/engine/doctor.py"; fi
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
+"$PY" engine/doctor.py
 ```
+
+ถ้าขึ้นว่า "ยังไม่ได้ติดตั้ง" (ไม่มี `$PY`) ให้ไปข้อ A แทน
 
 doctor พิมพ์ตารางภาษาไทย ✅ ผ่าน · ⚠️ ใช้ได้แต่ควรรู้ · ❌ ต้องแก้ก่อนตัดคลิป · ℹ️ ข้อมูล และมีบรรทัด "วิธีแก้" เป็นคำสั่งเดียวต่อปัญหา
 
@@ -172,14 +194,15 @@ doctor พิมพ์ตารางภาษาไทย ✅ ผ่าน · �
 - คำสั่งแก้ส่วนใหญ่คือรัน setup ซ้ำ ซึ่งข้ามของที่มีแล้ว รันได้เลย
 - ถามผู้ใช้ก่อน ถ้าคำสั่งแก้จะโหลดของใหญ่เกิน 1 GB (เช่นเปลี่ยนโมเดล หรือลงตัวตัดพื้นหลัง) หรือต้องใช้รหัสผ่านเครื่อง
 - ⚠️ พื้นที่ว่างน้อยกว่า 15 GB: ตัดคลิปได้ แต่คลิปยาวอาจไม่พอ บอกผู้ใช้ไว้
-- ⚠️ RAM น้อยกว่า 8 GB กับโมเดล large-v3: เสนอเปลี่ยนเป็น `--model large-v3-turbo`
-- ตรวจคลิปที่ทำเสร็จ (ขั้น QC ของ skill tad-clip ใช้เอง): `"$PY" "$KIT/engine/doctor.py" --qc "<final.mp4>" --expect-duration <วินาที>`
+- ⚠️ RAM น้อยกว่า 8 GB กับโมเดล large-v3: เสนอเปลี่ยนเป็น `--model medium`
+- ตรวจคลิปที่ทำเสร็จ (ขั้น QC ของ skill tad-clip ใช้เอง): `"$PY" engine/doctor.py --qc "<final.mp4>" --expect-duration <วินาที>`
 
 ## D. อัปเดต
 
 1. อัปเดต plugin
 
 ```bash
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 claude plugin marketplace update pun-nattapatch && claude plugin update tad-clip@pun-nattapatch
 ```
 

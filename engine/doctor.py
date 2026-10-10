@@ -39,11 +39,21 @@ def item(id_: str, name: str, status: str, detail: str = "", fix: str = "") -> d
     return {"id": id_, "name": name, "status": status, "detail": detail, "fix": fix}
 
 
+def _cfg() -> dict:
+    """The merged config, or the defaults when config.json is broken (check_setup reports that one)."""
+    try:
+        return kit.load_config()
+    except ValueError:
+        return json.loads(json.dumps(kit.DEFAULTS))
+
+
 def _tool(name: str):
     try:
         return kit.tool(name), None
     except kit.KitError:
         return None, f"ไม่พบ {name} ในเครื่อง"
+    except ValueError:
+        return None, "อ่านไฟล์ตั้งค่าไม่ได้"
 
 
 def _brew_fix(formula: str) -> str:
@@ -77,11 +87,15 @@ def check_ffmpeg(quick: bool = False) -> dict:
     filters = inst.ffmpeg_filters(ff)
     if not filters:
         return item("ffmpeg", name, "fail", f"เรียก {ff} แล้วไม่ตอบ", fix)
+    label, new_enough = inst.ffmpeg_version(ff)
+    if not new_enough:
+        need = ".".join(map(str, inst.FFMPEG_MIN))
+        return item("ffmpeg", name, "fail", f"ffmpeg {label} เก่าเกินไป ต้องการ {need} ขึ้นไป — {ff}", fix)
     missing = [f for f in inst.LIBASS_FILTERS if f not in filters]
     if missing:
         return item("ffmpeg", name, "fail",
                     f"ffmpeg ตัวนี้ฝังซับไม่ได้ (ไม่มี libass: ขาดฟิลเตอร์ {' '.join(missing)}) — {ff}", fix)
-    return item("ffmpeg", name, "ok", ff)
+    return item("ffmpeg", name, "ok", f"{label} · {ff}")
 
 
 def check_ffprobe(quick: bool = False) -> dict:
@@ -139,7 +153,7 @@ def check_python(quick: bool = False) -> dict:
 
 
 def check_model() -> dict:
-    model = kit.load_config()["whisper"]["model"]
+    model = _cfg()["whisper"]["model"]
     name = f"โมเดลถอดเสียง {model}"
     found = inst.model_dir(model, kit.models_dir())
     if not found:
@@ -159,7 +173,7 @@ def check_chrome(quick: bool = False) -> dict:
     browser = cands[0]  # the visual engine uses the first one, so that is the one to test
     if quick:
         return item("chrome", name, "ok", browser)
-    ok, why = inst.chrome_works(browser, CHROME_TIMEOUT)
+    ok, why = inst.chrome_ready(browser, CHROME_TIMEOUT)
     if not ok:
         return item("chrome", name, "fail", f"{Path(browser).name} {why} — {browser}", fix)
     return item("chrome", name, "ok", browser)
@@ -188,7 +202,7 @@ def _venv_has(module: str) -> bool:
 
 def check_cutout() -> dict:
     name = "ตัดพื้นหลังคน (cutout)"
-    engine = kit.load_config()["cutout"]["engine"]
+    engine = _cfg()["cutout"]["engine"]
     osn = _os()
     if engine == "auto":
         engine = "vision" if osn == "mac" else "tb" if _venv_has("transparent_background") else "off"
@@ -223,11 +237,11 @@ def check_ram() -> dict:
     ram = inst.ram_bytes()
     if ram is None:
         return item("ram", name, "info", "อ่านขนาด RAM ไม่ได้")
-    model = kit.load_config()["whisper"]["model"]
-    if inst.low_ram(ram) and model in ("large-v3", "large", "large-v2", "large-v1"):
+    model = _cfg()["whisper"]["model"]
+    if inst.low_ram(ram) and model.startswith("large"):
         return item("ram", name, "warn",
-                    f"RAM {ram / GB:.0f} GB (น้อยกว่า 8 GB) — โมเดล {model} อาจช้าหรือค้าง แนะนำ large-v3-turbo",
-                    inst.setup_command("--model large-v3-turbo"))
+                    f"RAM {ram / GB:.0f} GB (น้อยกว่า 8 GB) — โมเดล {model} อาจช้าหรือค้าง เปลี่ยนเป็น {inst.LIGHT_MODEL} จะเบากว่า",
+                    inst.setup_command(f"--model {inst.LIGHT_MODEL}"))
     return item("ram", name, "ok", f"{ram / GB:.0f} GB")
 
 
@@ -300,7 +314,7 @@ def qc(video: str, expect_duration: float = None) -> list:
     else:
         out.append(item("peak", "เสียงไม่พีค", "fail",
                         f"true peak {peak:.1f} dBTP (เกิน {QC_PEAK_MAX:g} dBTP) — เสียงอาจแตกตอนแพลตฟอร์มแปลงไฟล์",
-                        "ลดเสียง FX ใน sfx.json (db ติดลบมากขึ้น) แล้วรัน sfx_mix ใหม่"))
+                        "รัน engine.sfx_mix อีกครั้ง (มี limiter) — ถ้าคลิปไม่มีเสียงเอฟเฟกต์ ใช้ sfx.json ที่เป็น [] ก็ได้"))
     return out
 
 

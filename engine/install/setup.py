@@ -23,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 PY_VERSION = "3.12"
 DEFAULT_MODEL = "large-v3"
 GB = 1024 ** 3
+CHROME_TIMEOUT = 20   # same limit as doctor
 # approximate disk use in MB (installed), for the plan shown before anything is downloaded
 SIZE_MB = {
     "mac": {"ffmpeg": 1000, "node": 250, "uv": 50, "yt-dlp": 350},
@@ -31,6 +32,18 @@ SIZE_MB = {
 VENV_MB = 700        # Python 3.12 + faster-whisper/ctranslate2/onnxruntime + pythainlp + uv cache
 CHROME_MB = 300
 CUTOUT_MB = {"cpu": 2000, "cuda": 5000, "mac": 1500}
+# faster-whisper on an NVIDIA card needs cuBLAS + cuDNN 9 for CUDA 12; the pip wheels drop the DLLs in
+# site-packages/nvidia/*/bin, which ctranslate2 does not search → a .pth puts them on the DLL path for every venv run
+CUDA_WHEELS = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*"]
+CUDA_MB = 1500
+CUDA_PTH = ("import os, sys, glob; _tc = [d for d in glob.glob(os.path.join(sys.prefix, 'Lib', 'site-packages', 'nvidia', '*', 'bin')) "
+            "if os.path.isdir(d)]; [os.add_dll_directory(d) for d in _tc if hasattr(os, 'add_dll_directory')]; "
+            "os.environ['PATH'] = os.pathsep.join(_tc + [os.environ.get('PATH', '')])")
+VERIFY_CUDA = ("import sys, numpy as np\n"
+               "from faster_whisper import WhisperModel\n"
+               "m = WhisperModel(sys.argv[1], device='cuda', compute_type='float16', download_root=sys.argv[2], local_files_only=True)\n"
+               "segments, _ = m.transcribe(np.zeros(16000, dtype=np.float32), language='th', vad_filter=False)\n"
+               "list(segments)\nprint('cuda ok')")
 
 
 def say(msg: str = "") -> None:
@@ -45,20 +58,20 @@ def choose_model(arg) -> str:
     configured = (raw.get("whisper") or {}).get("model")
     if configured:
         return configured
-    return "large-v3-turbo" if inst.low_ram(inst.ram_bytes()) else DEFAULT_MODEL
+    return inst.LIGHT_MODEL if inst.low_ram(inst.ram_bytes()) else DEFAULT_MODEL
 
 
-def update_config(tools: dict, model: str) -> None:
+def update_config(tools: dict, model: str, device: str = None) -> None:
     """Write only what setup owns into the user's raw config (never the merged one: that would freeze preset colours)."""
     f = kit.home() / "config.json"
     raw = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     raw.setdefault("version", 1)
     raw["tools"] = {**(raw.get("tools") or {}), **tools}
-    raw["whisper"] = {**(raw.get("whisper") or {}), "model": model}
+    raw["whisper"] = {**(raw.get("whisper") or {}), "model": model, **({"device": device} if device else {})}
     kit.save_config(raw)
 
 
-def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict) -> tuple:
+def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict, cuda: bool = None) -> tuple:
     sizes = SIZE_MB[osn]
     names = {"ffmpeg": "ffmpeg (ตัดต่อ + ฝังซับ)", "node": "Node.js 22", "uv": "uv (ตัวติดตั้ง Python)", "yt-dlp": "yt-dlp (โหลดคลิปจากเว็บ)"}
     how = "ผ่าน Homebrew" if osn == "mac" else "โหลดไฟล์ลง " + str(kit.home() / "bin")
@@ -69,16 +82,27 @@ def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict) -> tuple:
         else:
             lines.append(f"- {label} {how} (~{sizes[k]} MB)")
             total += sizes[k]
-    lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp ใน {kit.home() / 'venv'} (~{VENV_MB} MB)")
-    total += VENV_MB
+    if kit.venv_python().exists():
+        lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp: มีแล้ว (เช็คแพ็กเกจให้ครบ)")
+    else:
+        lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp ใน {kit.home() / 'venv'} (~{VENV_MB} MB)")
+        total += VENV_MB
     mb = inst.WHISPER_MB.get(model, 3090)
     if inst.model_dir(model, kit.models_dir()):
         lines.append(f"- โมเดลถอดเสียง {model}: มีแล้ว ข้าม")
     else:
         lines.append(f"- โมเดลถอดเสียง {model} (~{mb / 1024:.1f} GB) ลง {kit.models_dir()}")
         total += mb
-    lines.append(f"- เบราว์เซอร์วาดการ์ด: ใช้ {'Edge' if osn == 'windows' else 'Google Chrome'} ที่มีอยู่ "
-                 f"ถ้าไม่มีจะโหลด chrome-headless-shell (~{CHROME_MB} MB)")
+    if cuda is None:
+        cuda = osn == "windows" and bool(gpu)
+    if cuda:
+        lines.append(f"- ไลบรารี CUDA ให้ถอดเสียงด้วยการ์ดจอ {gpu} (~{CUDA_MB / 1024:.1f} GB · ถ้าใช้ไม่ได้จะถอดด้วย CPU แทน)")
+        total += CUDA_MB
+    if osn == "windows":
+        lines.append(f"- เบราว์เซอร์วาดการ์ด: ใช้ Edge ที่มีในเครื่อง ถ้าเปิดไม่ได้จะโหลด chrome-headless-shell (~{CHROME_MB} MB)")
+    else:
+        lines.append(f"- เบราว์เซอร์วาดการ์ด: chrome-headless-shell จาก Google (~{CHROME_MB} MB · เปิดเร็วกว่า Chrome ตัวเต็ม)")
+        total += CHROME_MB
     if with_cutout:
         kind = "mac" if osn == "mac" else "cuda" if gpu else "cpu"
         torch = {"mac": "PyTorch", "cuda": f"PyTorch แบบ CUDA (การ์ดจอ {gpu})", "cpu": "PyTorch แบบ CPU"}[kind]
@@ -134,23 +158,68 @@ def install_cutout(uv: str, py: Path, osn: str, gpu) -> None:
         say("  ⚠️ ยังโหลดน้ำหนักโมเดลตัดพื้นหลังไม่ได้ — จะโหลดเองตอนใช้ครั้งแรก (ต้องต่อเน็ต)")
 
 
-def ensure_chrome(node: str) -> str:
-    for cand in inst.chrome_candidates():
-        ok, why = inst.chrome_works(cand, 30)
-        if ok:
-            say(f"  ✓ ใช้ {cand}")
-            return cand
-        say(f"  ⚠️ {Path(cand).name} {why} — ลองตัวถัดไป")
-    say("  โหลด chrome-headless-shell (~100 MB) …")
+def _works(browser: str) -> bool:
+    ok, why = inst.chrome_ready(browser, CHROME_TIMEOUT)
+    say(f"  ✓ ใช้ {browser}" if ok else f"  ⚠️ {Path(browser).name} {why} — ลองตัวถัดไป")
+    return ok
+
+
+def _download_shell(node: str):
+    say("  โหลด chrome-headless-shell จาก Chrome for Testing (~100 MB) …")
     code, out = inst._out([node, HERE / "get_chrome.mjs"], timeout=900)
     exe = out.strip().splitlines()[-1] if out.strip() else ""
     if code != 0 or not Path(exe).is_file():
-        raise kit.KitError(f"ติดตั้งเบราว์เซอร์วาดการ์ดไม่สำเร็จ: {out.strip()[-300:]}")
-    ok, why = inst.chrome_works(exe, 30)
-    if not ok:
-        raise kit.KitError(f"chrome-headless-shell {why}")
-    say(f"  ✓ ใช้ {exe}")
+        say(f"  ⚠️ โหลดไม่สำเร็จ: {out.strip()[-300:]}")
+        return None
     return exe
+
+
+def ensure_chrome(node: str) -> str:
+    """Mac: chrome-headless-shell first (full Chrome starts slowly on a cold Mac and hangs on one with no display),
+    Google Chrome as the fallback. Windows: Edge (on every machine) first, the downloaded shell as the fallback."""
+    cands = inst.chrome_candidates()
+    if kit.IS_MAC:
+        shells = [c for c in cands if Path(c).name == "chrome-headless-shell"]
+        for c in shells:
+            if _works(c):
+                return c
+        exe = _download_shell(node)
+        if exe and _works(exe):
+            return exe
+        cands = [c for c in cands if c not in shells]
+    for c in cands:
+        if _works(c):
+            return c
+    if not kit.IS_MAC:
+        exe = _download_shell(node)
+        if exe and _works(exe):
+            return exe
+    raise kit.KitError("หาเบราว์เซอร์สำหรับวาดการ์ดที่เปิดได้ไม่เจอ (Chrome/Edge/chrome-headless-shell) — เช็คอินเทอร์เน็ตแล้วสั่งติดตั้งใหม่")
+
+
+def _site_packages(py: Path) -> Path:
+    code, out = inst._out([py, "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"], timeout=60)
+    if code != 0 or not out.strip():
+        raise kit.KitError(f"หาโฟลเดอร์แพ็กเกจของ venv ไม่เจอ: {out.strip()[-200:]}")
+    return Path(out.strip().splitlines()[-1])
+
+
+def setup_cuda(uv: str, py: Path, model: str) -> str:
+    """Install cuBLAS/cuDNN, make them loadable, and transcribe 1 s of silence on the GPU. Returns the device to use."""
+    say("  ติดตั้งไลบรารี CUDA ให้ถอดเสียงด้วยการ์ดจอ (~1.5 GB) …")
+    try:
+        pip(uv, py, CUDA_WHEELS, "ติดตั้งไลบรารี CUDA")
+        (_site_packages(py) / "tadclip-cuda.pth").write_text(CUDA_PTH + "\n", encoding="utf-8")
+    except kit.KitError as e:
+        say(f"  ⚠️ {e} — ถอดเสียงด้วย CPU แทน")
+        return "cpu"
+    code, out = inst._out([py, "-c", VERIFY_CUDA, model, kit.models_dir()], timeout=900)
+    if code == 0 and "cuda ok" in out:
+        say("  ✓ ถอดเสียงด้วยการ์ดจอได้")
+        return "cuda"
+    tail = " ".join(out.strip().splitlines()[-2:])[:200]
+    say(f"  ⚠️ ถอดเสียงด้วยการ์ดจอไม่ผ่าน ({tail}) — ตั้งให้ใช้ CPU แทน ได้ผลเท่ากันแต่ช้ากว่า")
+    return "cpu"
 
 
 def download_model(py: Path, model: str) -> None:
@@ -168,7 +237,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="ติดตั้ง tad-clip")
     ap.add_argument("--yes", action="store_true", help="ติดตั้งเลยไม่ต้องถาม")
     ap.add_argument("--with-cutout", action="store_true", help="ติดตั้งตัวตัดพื้นหลัง transparent-background เพิ่ม")
-    ap.add_argument("--model", help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 · เครื่อง RAM น้อยใช้ large-v3-turbo)")
+    ap.add_argument("--no-cuda", action="store_true", help="ไม่ใช้การ์ดจอ NVIDIA ถอดเสียง (Windows)")
+    ap.add_argument("--model", help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 · เครื่อง RAM น้อยกว่า 8 GB ใช้ medium)")
     a = ap.parse_args(argv)
 
     osn = inst.os_name()
@@ -182,7 +252,8 @@ def main(argv=None) -> int:
             have = {k: bool(v) for k, v in mac.find(mac.brew_prefix(mac.require_brew())).items()}
         else:
             have = windows.have()
-        lines, need_mb = plan(osn, model, a.with_cutout, gpu, have)
+        cuda = osn == "windows" and bool(gpu) and not a.no_cuda
+        lines, need_mb = plan(osn, model, a.with_cutout, gpu, have, cuda)
         free_mb = inst.free_bytes(kit.home()) // (1024 * 1024)
         say(f"ติดตั้ง tad-clip · {inst.platform_label()} · ที่เก็บ {kit.home()}")
         say("ฟรีทั้งหมด ไม่ใช้ API key · สิ่งที่จะลงเครื่อง:")
@@ -213,6 +284,8 @@ def main(argv=None) -> int:
         update_config(tools, model)   # save now: the model download is the long part and may be interrupted
         say(f"\n[4/5] โมเดลถอดเสียง {model} (ครั้งแรกโหลดนาน แล้วใช้แบบไม่ต่อเน็ตได้)")
         download_model(py, model)
+        device = setup_cuda(tools["uv"], py, model) if cuda else "cpu"
+        update_config({}, model, device)
     except kit.KitError as e:
         say(f"\n❌ {e}")
         return 1

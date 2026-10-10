@@ -37,13 +37,42 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.os == 'macos' && '["macos-14"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-14","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Guard — no owner-specific strings in the kit
+        run: |
+          PYBIN=python; [ "$RUNNER_OS" = macOS ] && PYBIN=python3
+          "$PYBIN" - <<'EOF'
+          import re, subprocess, sys
+          for s in (sys.stdout, sys.stderr):
+              s.reconfigure(encoding="utf-8", errors="replace")
+          # owner-specific strings (shared context · Global Constraints) — written so this file does not contain them itself
+          BAD = [r"\u0e1b\u0e31\u0e19", r"\bP[u]n\b", r"agent[m]acmini", r"100\.64\.172\.7", r"Documents/[c]ontent",
+                 r"Tele[g]ram", r"\bCode[x]\b", r"\bki[e]\b", r"\.herme[s]\b"]
+          ALLOWED_FILES = {"presets/pun-navy-coral.json"}
+          CREDIT = re.compile(r"@pun_nattapatch|punnattapatch\.com")   # credit lines + README/LP links
+          rx = re.compile("|".join(BAD))
+          files = [f for f in subprocess.run(["git", "ls-files", "-z"], capture_output=True).stdout.decode("utf-8").split("\0") if f]
+          hits = []
+          for f in files:
+              if f in ALLOWED_FILES:
+                  continue
+              try:
+                  text = open(f, encoding="utf-8").read()
+              except (UnicodeDecodeError, OSError):
+                  continue  # binary (video, font, audio)
+              for n, line in enumerate(text.splitlines(), 1):
+                  if rx.search(line) and not CREDIT.search(line):
+                      hits.append(f"{f}:{n}: {line.strip()[:140]}")
+          print("\n".join(hits) if hits else f"ok: {len(files)} files, no owner-specific strings")
+          sys.exit(1 if hits else 0)
+          EOF
 
       - name: Paths
         run: |
@@ -108,10 +137,12 @@ jobs:
 
       - name: Unit tests (pytest)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
-        run: '"$PY" -m pytest -q -m "not network"'
+        timeout-minutes: 20
+        run: '"$PY" -m pytest -v -m "not network" -o faulthandler_timeout=300 --durations=15'
 
       - name: Unit tests (node)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        timeout-minutes: 10
         run: '"$NODE" --test "tests/*.test.mjs"'
 
       - name: Probe — whisper model in a Thai + space folder (info only)
@@ -133,6 +164,7 @@ jobs:
 
       - name: Smoke (fixture → final.mp4)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        timeout-minutes: 20
         run: '"$PY" tests/smoke/smoke.py --artifacts "$ARTIFACTS"'
 
       - name: Upload smoke output

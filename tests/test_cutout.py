@@ -97,6 +97,12 @@ def test_hdr_sources_get_a_tonemap_chain():
     assert cutout.sdr_chain({"color_transfer": "bt709"}) == "format=yuv420p"
 
 
+def test_vision_off_mac_is_a_thai_error(monkeypatch):
+    monkeypatch.setattr(cutout, "IS_MAC", False)
+    with pytest.raises(kit.KitError, match="Mac"):
+        cutout.vision_bin()
+
+
 def test_tb_device_order(monkeypatch):
     seen = {}
 

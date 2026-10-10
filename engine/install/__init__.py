@@ -17,6 +17,7 @@ from pathlib import Path
 from engine import kit
 
 NODE_MIN = 22
+FFMPEG_MIN = (5, 1)   # -fps_mode (constant-fps output) arrived in ffmpeg 5.1
 LIBASS_FILTERS = ("subtitles", "ass")
 
 # faster-whisper short names → Hugging Face repo (faster_whisper/utils.py _MODELS)
@@ -112,6 +113,21 @@ def ffmpeg_filters(ffmpeg: str) -> set:
     return names
 
 
+def ffmpeg_version(ffmpeg: str) -> tuple:
+    """(version label, new enough?) — release numbers compared directly; git builds ("N-121083-g…") by libavutil,
+    which was 57.28 in ffmpeg 5.1. Unreadable → (label, True): do not block on a string we cannot parse."""
+    code, out = _out([ffmpeg, "-version"], timeout=60)
+    m = re.search(r"ffmpeg version (\S+)", out or "")
+    label = m.group(1) if m else "?"
+    rel = re.match(r"n?(\d+)\.(\d+)", label)
+    if rel:
+        return label, (int(rel.group(1)), int(rel.group(2))) >= FFMPEG_MIN
+    lib = re.search(r"libavutil\s+(\d+)\.\s*(\d+)", out or "")
+    if lib:
+        return label, (int(lib.group(1)), int(lib.group(2))) >= (57, 28)
+    return label, True
+
+
 def has_libass(ffmpeg: str) -> bool:
     return set(LIBASS_FILTERS) <= ffmpeg_filters(ffmpeg)
 
@@ -132,7 +148,10 @@ def model_dir(model: str, models: Path) -> Path | None:
 def chrome_candidates() -> list:
     """Browsers that can draw the cards, in the order the visual engine tries them (config first)."""
     found = []
-    configured = (kit.load_config().get("tools") or {}).get("chrome")
+    try:
+        configured = (kit.load_config().get("tools") or {}).get("chrome")
+    except ValueError:   # broken config.json — doctor reports it separately
+        configured = None
     if configured:
         found.append(configured)
     shells = sorted((kit.home() / "chrome").glob("**/chrome-headless-shell" + (".exe" if kit.IS_WINDOWS else "")))
@@ -178,6 +197,15 @@ def chrome_works(browser: str, timeout: float = 20) -> tuple:
         tail = " ".join(out.strip().splitlines()[-2:])[:160]
         return False, f"เปิดแล้วปิดตัว (exit {code}) {tail}".strip()
     return True, ""
+
+
+def chrome_ready(browser: str, timeout: float = 20) -> tuple:
+    """chrome_works, retried once after a timeout: a big browser's very first launch can be slow
+    (cold disk, Gatekeeper or antivirus scan) — the second launch is the realistic one."""
+    ok, why = chrome_works(browser, timeout)
+    if not ok and why.startswith("เปิดแล้วไม่ตอบ"):
+        ok, why = chrome_works(browser, timeout)
+    return ok, why
 
 
 def swiftc() -> str | None:
@@ -229,6 +257,9 @@ def free_bytes(path) -> int:
     while not p.exists() and p != p.parent:
         p = p.parent
     return shutil.disk_usage(str(p)).free
+
+
+LIGHT_MODEL = "medium"   # what to offer a low-RAM machine (large-v3-turbo transcribes Thai badly)
 
 
 def low_ram(ram: int | None) -> bool:

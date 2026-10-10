@@ -25,8 +25,13 @@ def resplit_group(group, new):
         if not ws or "".join(w["t"] for w in ws) != t:
             raise ValueError(f"ประกอบกลับไม่ตรง: {t!r}")
         out.append({"t": t, "words": ws})
-    out[0]["f"], out[-1]["to"] = group[0]["f"], group[-1]["to"]
+    start, end = group[0]["f"], group[-1]["to"]
+    out[0]["f"], out[-1]["to"] = start, end
     for a, b in zip(out, out[1:]):
         b["f"] = max(a["f"] + 200, b["words"][0]["f"] - LEAD)
         a["to"] = b["f"]
+    if end > start and any(c["to"] <= c["f"] for c in out):    # the breaks landed past the group's end: share the span evenly
+        n = len(out)
+        for k, c in enumerate(out):
+            c["f"], c["to"] = start + (end - start) * k // n, start + (end - start) * (k + 1) // n
     return out

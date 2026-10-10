@@ -91,6 +91,23 @@ def test_ffmpeg_with_libass_is_green(tmp_path):
     assert exe in c["detail"]
 
 
+def test_ffmpeg_older_than_5_1_is_red(tmp_path):
+    body = FILTERS_WITH_ASS.replace("ffmpeg version 7.1-fake", "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021")
+    kit.save_config({"tools": {"ffmpeg": fake_exe(tmp_path / "bin", "ffmpeg", body)}})
+    c = doctor.check_ffmpeg()
+    assert c["status"] == "fail"
+    assert "5.1" in c["detail"] and "4.4.2" in c["detail"]
+    assert c["fix"]
+
+
+def test_ffmpeg_git_master_build_counts_as_new(tmp_path):
+    body = FILTERS_WITH_ASS.replace('print("ffmpeg version 7.1-fake")',
+                                    'print("ffmpeg version N-121083-g1a2b3c4d5e-20261010 Copyright (c) 2000-2026")\n'
+                                    '    print("libavutil      60. 13.100 / 60. 13.100")')
+    kit.save_config({"tools": {"ffmpeg": fake_exe(tmp_path / "bin", "ffmpeg", body)}})
+    assert doctor.check_ffmpeg()["status"] == "ok"
+
+
 def test_missing_ffmpeg_says_not_found_not_traceback(tmp_path, monkeypatch):
     kit.save_config({"tools": {"ffmpeg": str(tmp_path / "gone" / "ffmpeg")}})
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
@@ -186,11 +203,12 @@ def test_no_browser_at_all_is_red(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- machine
-def test_low_ram_warns_and_suggests_turbo(monkeypatch):
+def test_low_ram_warns_and_suggests_medium(monkeypatch):
     monkeypatch.setattr(inst, "ram_bytes", lambda: 4 * 1024 ** 3)
     c = doctor.check_ram()
     assert c["status"] == "warn"
-    assert "large-v3-turbo" in c["detail"] + c["fix"]
+    assert "--model medium" in c["fix"]
+    assert "turbo" not in c["detail"] + c["fix"]
 
 
 def test_low_disk_warns(monkeypatch):
@@ -237,6 +255,17 @@ def test_json_schema_is_stable(tmp_home):
     # a fresh home has no setup → not ok, exit 1
     assert report["ok"] is False and res.returncode == 1
     assert by_id(report["checks"])["setup"]["status"] == "fail"
+
+
+def test_corrupt_config_is_a_red_row_not_a_traceback(tmp_home):
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    (tmp_home / "config.json").write_text('{"tools": {"ffmpeg": ', encoding="utf-8")
+    res = run_doctor("--json", env_home=tmp_home)
+    report = json.loads(res.stdout)
+    assert [c["id"] for c in report["checks"]] == FULL_IDS
+    setup = by_id(report["checks"])["setup"]
+    assert setup["status"] == "fail" and "อ่านไม่ได้" in setup["detail"]
+    assert "Traceback" not in res.stderr
 
 
 def test_quick_json_ids(tmp_home):
@@ -297,6 +326,7 @@ def test_qc_catches_hot_audio(tmp_path, qc_tools):
     assert c["size"]["status"] == "ok"  # 2K preset size is accepted
     assert c["peak"]["status"] == "fail"
     assert "dBTP" in c["peak"]["detail"]
+    assert "engine.sfx_mix" in c["peak"]["fix"] and "limiter" in c["peak"]["fix"]
 
 
 @needs_ffmpeg

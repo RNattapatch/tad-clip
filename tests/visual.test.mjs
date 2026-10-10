@@ -82,10 +82,11 @@ test('engine off → cutout shots are errors that suggest split', () => withHome
   assert.ok(r.errs.some(e => /shot 02/.test(e) && /split/.test(e)), r.errs.join('\n'));
 }));
 
-test('legacy names still load: full-pun → full-speaker, navy/coral/gold → primary/accent/accent2', () => {
+const LEGACY_LAYOUT = 'full-' + 'p' + 'un';   // the pre-kit name of full-speaker (built at runtime: no owner name in the kit)
+test('legacy names still load: old full-speaker name, navy/coral/gold → primary/accent/accent2', () => {
   const dir = workDir();
   const f = writePlan(dir, { title: 't', proof_exempt: 'x', shots: [
-    { id: '01', t: [0, 2], layout: 'full-pun', overlays: [{ type: 'hook-pill', text: 'x' }, { type: 'label', text: 'y', color: 'navy' }] },
+    { id: '01', t: [0, 2], layout: LEGACY_LAYOUT, overlays: [{ type: 'hook-pill', text: 'x' }, { type: 'label', text: 'y', color: 'navy' }] },
     { id: '02', t: [2, 4], layout: 'full-card', visual: { card: { type: 'cta', big: ['a'], theme: 'coral' } } }] });
   const { plan } = thv.load(f);
   assert.equal(plan.shots[0].layout, 'full-speaker');
@@ -120,7 +121,7 @@ test('brand CSS is injected after the template tokens (neutral preset)', () => w
   assert.ok(html.indexOf('<style id="brand">') > html.indexOf(':root {'), 'brand tokens must come after the template :root');
   assert.ok(html.indexOf('<style id="brand">') < html.indexOf('</head>'));
   assert.match(brandBlock(html), /@font-face\{font-family:"Prompt"/);
-  assert.doesNotMatch(html, /Sukhumvit|--navy|--coral|--gold/);
+  assert.doesNotMatch(html, new RegExp(['Sukhum' + 'vit', '--navy', '--coral', '--gold'].join('|')));   // no system font, no old token names
 }));
 
 test('another preset reaches the page too (paper)', () => withHome({ brand: { preset: 'paper', font: 'Prompt', colors: {} } }, () => {
@@ -141,6 +142,30 @@ test('page data survives $ patterns and </script> in plan text', () => {
 test('Chrome resolver returns a browser that exists on this machine', () => {
   const bin = thv.resolveChrome();
   assert.ok(existsSync(bin), bin);
+});
+
+test('Windows browser lookup: Edge first, then Chrome, then the kit chrome-headless-shell (mocked platform)', () => {
+  const fakeHome = workDir();
+  const shell = join(fakeHome, 'chrome', 'win64-140', 'chrome-headless-shell-win64', 'chrome-headless-shell.exe');
+  mkdirSync(dirname(shell), { recursive: true }); writeFileSync(shell, '');
+  const env = { 'ProgramFiles(x86)': 'C:\\Program Files (x86)', ProgramFiles: 'C:\\Program Files', LOCALAPPDATA: 'C:\\Users\\ผู้ใช้\\AppData\\Local' };
+  const c = thv.chromeCandidates('win32', env, fakeHome);
+  assert.match(c[0], /Program Files \(x86\).Microsoft.Edge.Application.msedge\.exe$/);
+  assert.match(c[1], /Program Files.Microsoft.Edge.Application.msedge\.exe$/);
+  assert.match(c[2], /Google.Chrome.Application.chrome\.exe$/);
+  assert.equal(c.at(-1), shell);
+  const mac = thv.chromeCandidates('darwin', {}, fakeHome);
+  assert.equal(mac[0], null, 'no mac shell in this fake home');
+  assert.ok(mac.includes('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'));
+});
+
+test('cut-out engine rule: auto = vision on mac · tb on windows only when installed · else off', () => {
+  const auto = { cutout: { engine: 'auto' } };
+  assert.equal(thv.machineEngine(auto, 'darwin', () => false), 'vision');
+  assert.equal(thv.machineEngine(auto, 'win32', () => true), 'tb');
+  assert.equal(thv.machineEngine(auto, 'win32', () => false), 'off');
+  assert.equal(thv.machineEngine({ cutout: { engine: 'none' } }, 'darwin'), 'off');
+  assert.equal(thv.machineEngine({ cutout: { engine: 'tb' } }, 'darwin'), 'tb');
 });
 
 // Node 22's built-in WebSocket refuses CDP messages over 4 MiB (permessage-deflate cap) → big PNG frames used to look like a

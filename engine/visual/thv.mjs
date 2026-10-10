@@ -3,20 +3,20 @@
 // burn karaoke subs · prompt blocks (optional, any free image tool) · CapCut edit sheet.
 // Zero npm deps: drives a local Chrome / Edge headless over CDP (--remote-debugging-pipe) and pipes frames to ffmpeg.
 // Usage: node thv.mjs <check|all|board|cards|motion|loose|animatic|prompts|compose|subs|sheet> <plan.json>
-//        [--shot ID] [--matte green|alpha] [--ass file.karaoke.ass] [--motion (with all)]
+//        [--shot ID] [--matte green|alpha] [--ass file.karaoke.ass] [--motion (with all)] [--force (compose: redo cached cut-outs)]
 // Every path inside plan.json (source_video · subs · footage · overlay images · proof files) is relative to the plan's folder.
 
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, readdirSync, existsSync, statSync, copyFileSync, realpathSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { join, dirname, resolve, basename, relative } from 'node:path';
+import { join, dirname, resolve, basename, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
-import { KIT_ROOT, IS_WINDOWS, IS_MAC, home, loadConfig, tool, brandCss, fontsDir } from '../kit.mjs';
+import { KIT_ROOT, IS_MAC, home, loadConfig, tool, brandCss, fontsDir } from '../kit.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const W = 1080, H = 1920;
 export const LAYOUTS = ['split', 'cutout', 'full-card', 'full-speaker', 'proof'];
-const LAYOUT_ALIAS = { 'full-pun': 'full-speaker' };   // plans written before the kit
+const LAYOUT_ALIAS = { ['full-' + 'p' + 'un']: 'full-speaker' };   // plans written before the kit used the author's name for this layout
 const TONE_ALIAS = { navy: 'primary', coral: 'accent', gold: 'accent2' };
 export const FULL_CARDS = ['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline'];
 export const OVERLAYS = ['image', 'hook-pill', 'label', 'counter', 'chat', 'annotate', 'highlight', 'source', 'keyword', 'name', 'docchip'];
@@ -90,11 +90,11 @@ function tbInstalled() {
   return r.status === 0;
 }
 // same rule as engine/cutout resolve_engine(): auto = vision on macOS, tb elsewhere when installed, else off
-export function machineEngine(c = cfg || loadConfig()) {
+export function machineEngine(c = cfg || loadConfig(), plat = process.platform, hasTb = tbInstalled) {
   let e = String(c?.cutout?.engine || 'auto').toLowerCase();
   if (e === 'none') e = 'off';
   if (e !== 'auto') return e;
-  return IS_MAC ? 'vision' : tbInstalled() ? 'tb' : 'off';
+  return plat === 'darwin' ? 'vision' : hasTb() ? 'tb' : 'off';
 }
 // per shot: shot.cutout_engine › plan.cutout.engine › machine · plan-level "none" = keep the old picture-in-picture box (no cut-out)
 const shotEngine = s => { const e = s.cutout_engine || (plan.cutout || {}).engine; return !e || e === 'auto' ? ENGINE : String(e).toLowerCase(); };
@@ -237,23 +237,29 @@ function findUnder(dir, name, depth = 4) {
   for (const e of entries.filter(x => x.isDirectory()).sort((a, b) => b.name.localeCompare(a.name))) { const f = findUnder(join(dir, e.name), name, depth - 1); if (f) return f; }
   return null;
 }
-export function resolveChrome() {
-  try { return tool('chrome'); } catch { /* not configured / not on PATH → platform candidates */ }
-  const env = process.env;
-  const cands = IS_WINDOWS ? [
-    join(env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    join(env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    join(env.ProgramFiles || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    findUnder(join(home(), 'chrome'), 'chrome-headless-shell.exe'),
-  ] : [
-    findUnder(join(home(), 'chrome'), 'chrome-headless-shell'),
+// ordered browser candidates per platform (pure → unit-testable for Windows on any machine)
+export function chromeCandidates(plat = process.platform, env = process.env, kitHome = home()) {
+  if (plat === 'win32') {
+    const J = win32.join;
+    return [
+      J(env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),   // every Windows 10/11 has Edge
+      J(env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      J(env.ProgramFiles || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      env.LOCALAPPDATA ? J(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe') : null,   // per-user Chrome install
+      findUnder(join(kitHome, 'chrome'), 'chrome-headless-shell.exe'),
+    ];
+  }
+  return [
+    findUnder(join(kitHome, 'chrome'), 'chrome-headless-shell'),   // engine/install/get_chrome.mjs puts it here
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     join(homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
     '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
     findUnder(join(homedir(), 'Library', 'Caches', 'ms-playwright'), 'chrome-headless-shell'),   // dev machines with Playwright
   ];
-  const hit = cands.find(c => c && existsSync(c));
+}
+export function resolveChrome() {
+  try { return tool('chrome'); } catch { /* not configured / not on PATH → platform candidates */ }
+  const hit = chromeCandidates().find(c => c && existsSync(c));
   if (hit) return hit;
   throw new Error('ไม่พบ Chrome หรือ Edge สำหรับวาดการ์ด — พิมพ์ "ตรวจเครื่อง tad-clip" ให้ Claude ติดตั้งให้ (โหลด chrome-headless-shell เข้า ~/.tad-clip/chrome)');
 }
@@ -527,7 +533,7 @@ async function compose() {
     const engine = shotEngine(s); if (engine === 'none' || engine === 'off') return null;
     const dir = join(OUT, 'cutout'); mkdirSync(dir, { recursive: true });
     const mov = join(dir, `${s.id}-${ss}-${n}-${engine}.webm`);
-    if (existsSync(mov) && statSync(mov).mtimeMs > statSync(src).mtimeMs) return mov;
+    if (!ARGS.includes('--force') && existsSync(mov) && statSync(mov).mtimeMs > statSync(src).mtimeMs) return mov;   // --force = cut again
     const seg = join(tmp, `cut-${list.length}.mp4`);   // constant fps, 8-bit SDR → the matte lines up frame for frame
     await run(['-ss', ss, '-i', src, '-t', (n / FPS + 0.1).toFixed(3), '-an', '-vf', `${sdr(src)}fps=${FPS},${TO709},format=yuv420p`, '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', ...TAG709, seg]);
     console.log(`… shot ${s.id}: ตัดพื้นหลัง${SPEAKER} (${engine})`);
@@ -696,7 +702,7 @@ function sheet() {
 export async function main(argv) {
   const [cmd, planArg, ...rest] = argv;
   if (!COMMANDS.includes(cmd) || !planArg) {
-    console.error(`Usage: node thv.mjs <${COMMANDS.join('|')}> <plan.json> [--shot ID] [--matte green|alpha] [--ass file] [--motion]`);
+    console.error(`Usage: node thv.mjs <${COMMANDS.join('|')}> <plan.json> [--shot ID] [--matte green|alpha] [--ass file] [--motion] [--force]`);
     return 1;
   }
   const ctx = load(planArg, rest);

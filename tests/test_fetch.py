@@ -164,6 +164,87 @@ def test_credit_cli_rejects_bad_ads_value(tmp_path):
         fetch.main(["credit", "--file", str(tmp_path / "c.md"), "--item", "x", "--url", "u", "--license", "L", "--ads", "maybe"])
 
 
+FACTS = """# CREDITS
+
+## ตรวจข้อเท็จจริง
+
+| ข้อมูลบนจอ | ตัวเลข | แหล่ง | ยืนยันแล้ว | หมายเหตุ |
+|---|---|---|---|---|
+| ยอดขายปี 2023 | 788,131 ล้านเยน | รายงานประจำปี | ใช่ | - |
+| ผู้ก่อตั้ง | โมโมฟูกุ | หน้าทางการ | ไม่ | ต้องเช็คอีกที |
+
+## ภาพและคลิป
+"""
+
+FACTS_AFTER = """
+## ตรวจข้อเท็จจริงรอบสอง
+
+| ข้อมูลบนจอ | ตัวเลข | แหล่ง | ยืนยันแล้ว | หมายเหตุ |
+|---|---|---|---|---|
+| ปีก่อตั้ง | 1958 | หน้าทางการ | ไม่ | - |
+"""
+
+
+def test_credits_summary_counts_only_the_credits_table(tmp_path):
+    f = tmp_path / "CREDITS.md"
+    f.write_text(FACTS, encoding="utf-8")
+    fetch.credit(f, "ภาพสนามบิน", "https://e.test/a", "CC BY 4.0", True)
+    fetch.credit(f, "คลิปทีวี", "https://e.test/b", "ลิขสิทธิ์", False)
+    # the orchestrator may also append another facts table after the credits table
+    f.write_text(f.read_text(encoding="utf-8") + FACTS_AFTER, encoding="utf-8")
+    assert fetch.credits_summary(f) == {"total": 2, "ads_ok": 1, "ads_not_ok": 1, "not_ok_items": ["คลิปทีวี"]}
+
+
+def test_new_credit_row_lands_inside_the_credits_table_not_at_the_end_of_the_file(tmp_path):
+    f = tmp_path / "CREDITS.md"
+    f.write_text(FACTS, encoding="utf-8")
+    fetch.credit(f, "แรก", "u1", "L", True)
+    f.write_text(f.read_text(encoding="utf-8") + FACTS_AFTER, encoding="utf-8")
+    fetch.credit(f, "สอง", "u2", "L", False)
+    fetch.credit(f, "แรก", "u1", "L", False, "แก้ธง")                      # update in place, facts rows untouched
+    lines = f.read_text(encoding="utf-8").splitlines()
+    head = lines.index(fetch.CREDIT_HEAD)
+    block = []
+    for ln in lines[head + 2:]:
+        if not ln.startswith("|"):
+            break
+        block.append(ln)
+    assert block == ["| แรก | u1 | L | ไม่ | แก้ธง |", "| สอง | u2 | L | ไม่ |  |"]
+    assert lines[-1] == "| ปีก่อตั้ง | 1958 | หน้าทางการ | ไม่ | - |"       # the later facts table keeps its last row
+    assert "| ยอดขายปี 2023 | 788,131 ล้านเยน | รายงานประจำปี | ใช่ | - |" in lines
+    assert fetch.credits_summary(f)["total"] == 2
+
+
+def test_credits_summary_of_a_file_without_the_credits_table_is_empty(tmp_path):
+    f = tmp_path / "CREDITS.md"
+    f.write_text(FACTS, encoding="utf-8")
+    assert fetch.credits_summary(f) == {"total": 0, "ads_ok": 0, "ads_not_ok": 0, "not_ok_items": []}
+
+
+def test_credit_write_failures_are_thai_messages_not_tracebacks(tmp_path, capsys, monkeypatch):
+    blocker = tmp_path / "ไฟล์ ขวาง"
+    blocker.write_text("x")                                      # a file where the folder should be
+    args = ["credit", "--item", "x", "--url", "u", "--license", "L", "--ads", "no", "--file"]
+    assert fetch.main(args + [str(blocker / "CREDITS.md")]) == 1
+    err = capsys.readouterr().err
+    assert "เขียน" in err and "CREDITS.md" in err and "Traceback" not in err
+
+    def deny(self, *a, **k):
+        raise PermissionError(13, "Permission denied", str(self))
+    monkeypatch.setattr(Path, "write_text", deny)
+    assert fetch.main(args + [str(tmp_path / "CREDITS.md")]) == 1
+    err = capsys.readouterr().err
+    assert "เขียน" in err and "สิทธิ์" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize("raw,safe", [
+    ("NUL.txt", "_NUL.txt"), ("con", "_con"), ("Aux.jpg", "_Aux.jpg"), ("PRN", "_PRN"), ("COM1.png", "_COM1.png"), ("lpt9", "_lpt9"),
+    ("CON .", "_CON"), ("CONSOLE.png", "CONSOLE.png"), ("com10", "com10"), ("lpt0.gif", "lpt0.gif"), ("my con.png", "my con.png"),
+])
+def test_safe_name_avoids_windows_reserved_device_names(raw, safe):
+    assert fetch._safe_name(raw) == safe
+
+
 # ---------- gif2clip ----------
 
 def test_gif2clip_fits_on_blurred_copy_1080x960(tmp_path):
@@ -296,11 +377,47 @@ def test_ytsearch_parses_flat_playlist_output(monkeypatch, capsys):
     monkeypatch.setattr(kit, "tool", lambda name: "YTDLP")
     rows = fetch.ytsearch("นิสชิน 1971 CM", limit=3)
     assert seen[0][0] == "YTDLP" and seen[0][-1] == "ytsearch3:นิสชิน 1971 CM" and "--flat-playlist" in seen[0]
+    assert seen[0][seen[0].index("--encoding") + 1] == "utf-8"
     assert rows[0] == {"id": "abc123", "title": "ชื่อ คลิป\tมีแท็บ", "channel": "ช่อง ทดสอบ", "duration": "0:15", "url": "https://www.youtube.com/watch?v=abc123"}
     assert rows[1]["id"] == "xyz" and rows[1]["url"] == "https://www.youtube.com/watch?v=xyz" and rows[1]["channel"] == ""
     assert len(rows) == 2                                   # the all-NA line has no id and is dropped
     assert fetch.main(["ytsearch", "x"]) == 0
     assert json.loads(capsys.readouterr().out)[0]["id"] == "abc123"
+
+
+def test_every_ytdlp_call_forces_utf8(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(kit, "run", lambda cmd, **kw: calls.append(([str(c) for c in cmd], kw)) or subprocess.CompletedProcess(cmd, 0, '{"id": "x"}', ""))
+    monkeypatch.setattr(kit, "tool", lambda name: {"yt-dlp": "YTDLP", "ffmpeg": "FFMPEG"}[name])
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "x.mp4").write_bytes(b"1")
+    fetch._ytdlp_info("https://e.test/v")
+    fetch._ytdlp_download("https://e.test/v", tmp_path / "d", 1080, True)
+    fetch.ytsearch("q")
+    assert len(calls) == 3
+    for cmd, kw in calls:
+        assert cmd[cmd.index("--encoding") + 1] == "utf-8"
+        assert kw["env"]["PYTHONIOENCODING"] == "utf-8" and kw["env"]["PYTHONUTF8"] == "1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake yt-dlp is a shell wrapper")
+def test_ytsearch_thai_titles_survive_a_non_utf8_console_page(tmp_path, monkeypatch, tmp_home):
+    """Windows consoles default to a legacy code page; the child is told to speak UTF-8 so Thai titles are not turned into '?'."""
+    (tmp_path / "fake_yt.py").write_text(
+        "import os, sys\n"
+        "enc = os.environ.get('PYTHONIOENCODING', 'cp1252')\n"
+        "assert sys.argv[sys.argv.index('--encoding') + 1] == 'utf-8'\n"
+        "sys.stdout.buffer.write('abc\\t0:15\\tช่อง ไทย\\thttps://y.test/abc\\tชื่อคลิป ภาษาไทย\\n'.encode(enc, 'replace'))\n",
+        encoding="utf-8")
+    wrapper = tmp_path / "yt-dlp"
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{tmp_path / "fake_yt.py"}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    cfg = json.loads((tmp_home / "config.json").read_text(encoding="utf-8"))
+    cfg["tools"]["yt-dlp"] = str(wrapper)
+    (tmp_home / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")            # the parent console is a legacy code page
+    rows = fetch.ytsearch("อะไรก็ได้")
+    assert rows[0]["title"] == "ชื่อคลิป ภาษาไทย" and rows[0]["channel"] == "ช่อง ไทย"
 
 
 # ---------- image (http stubbed) ----------

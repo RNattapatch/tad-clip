@@ -14,6 +14,7 @@ import argparse
 import html
 import json
 import math
+import os
 import re
 import shutil
 import sys
@@ -50,9 +51,15 @@ def _require_http(url: str) -> None:
         raise KitError(f"รับเฉพาะลิงก์ http/https เท่านั้น: {url}")
 
 
+_WINDOWS_RESERVED = re.compile(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])")
+
+
 def _safe_name(name: str, fallback: str = "file") -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
-    return name[:120] or fallback
+    """File name that is legal on Windows and macOS (reserved device names get a leading underscore)."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")[:120] or fallback
+    if _WINDOWS_RESERVED.fullmatch(name.split(".")[0].strip()):
+        name = "_" + name
+    return name
 
 
 def _http_get(url: str) -> tuple:
@@ -177,13 +184,19 @@ def image(url: str, out_dir, force: bool = False) -> Path:
 
 # ---------- video (yt-dlp) ----------
 
+def _ytdlp(args: list):
+    """Run yt-dlp telling it (flag + env) to speak UTF-8: a legacy Windows console code page would turn Thai titles into '?'."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    return kit.run([kit.tool("yt-dlp"), "--encoding", "utf-8", *args], env=env)
+
+
 def _hint(err: Exception) -> str:
     return _RATE_HINT if "429" in str(err) else _YTDLP_HINT
 
 
 def _ytdlp_info(url: str) -> dict:
     try:
-        res = kit.run([kit.tool("yt-dlp"), "--no-playlist", "--no-warnings", "--skip-download", "-J", url])
+        res = _ytdlp(["--no-playlist", "--no-warnings", "--skip-download", "-J", url])
     except KitError as e:
         raise KitError(f"{e}{_hint(e)}") from None
     data = json.loads(res.stdout)
@@ -201,11 +214,11 @@ def _ytdlp_download(url: str, dest: Path, max_height: int, audio: bool) -> Path:
     # "<=?" keeps formats whose height is unknown (direct file links) instead of dropping them
     fmt = f"bv*[height<=?{h}]+ba/b[height<=?{h}]" if audio else f"bv*[height<=?{h}]/b[height<=?{h}]"
     dest.mkdir(parents=True, exist_ok=True)
-    cmd = [kit.tool("yt-dlp"), "--no-playlist", "--no-warnings", "--no-progress", "-f", fmt,
+    cmd = ["--no-playlist", "--no-warnings", "--no-progress", "-f", fmt,
            "-S", "res,fps,vcodec:h264,acodec:aac", "--merge-output-format", "mp4",
            "--ffmpeg-location", kit.tool("ffmpeg"), "-o", str(dest / "%(id)s.%(ext)s"), url]
     try:
-        kit.run(cmd)
+        _ytdlp(cmd)
     except KitError as e:
         raise KitError(f"{e}{_hint(e)}") from None
     files = [p for p in dest.iterdir() if p.is_file() and p.suffix.lower() not in (".part", ".ytdl", ".temp")]
@@ -217,8 +230,8 @@ def _ytdlp_download(url: str, dest: Path, max_height: int, audio: bool) -> Path:
 def ytsearch(query: str, limit: int = 8) -> list:
     """Search YouTube through yt-dlp (no key, nothing downloaded) -> [{id, title, channel, duration, url}]."""
     try:
-        res = kit.run([kit.tool("yt-dlp"), "--no-warnings", "--flat-playlist", "--print",
-                       "%(id)s\t%(duration_string)s\t%(channel)s\t%(url)s\t%(title)s", f"ytsearch{int(limit)}:{query}"])
+        res = _ytdlp(["--no-warnings", "--flat-playlist", "--print",
+                      "%(id)s\t%(duration_string)s\t%(channel)s\t%(url)s\t%(title)s", f"ytsearch{int(limit)}:{query}"])
     except KitError as e:
         raise KitError(f"{e}{_hint(e)}") from None
     out = []
@@ -336,32 +349,51 @@ def _split_row(line: str) -> list:
 
 
 def _is_data_row(line: str) -> bool:
+    line = line.strip()
     if not line.startswith("|") or re.match(r"^\|\s*-{2,}", line):
         return False
     cells = _split_row(line)
     return len(cells) >= 4 and cells[0] != "ชิ้น"
 
 
-def credit(file, item: str, url: str, license_name: str, ads_ok: bool, note: str = "") -> Path:
-    """Append one row to CREDITS.md (header written once). Same item+url again -> that row is replaced."""
-    f = Path(file)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    row = f"| {_cell(item)} | {_cell(url)} | {_cell(license_name)} | {YES if ads_ok else NO} | {_cell(note)} |"
-    lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
-    if not any(ln.strip() == CREDIT_HEAD for ln in lines):
-        if lines and lines[-1].strip():
-            lines.append("")
-        elif not lines:
-            lines += [CREDIT_TITLE, "", CREDIT_INTRO, ""]
-        lines += [CREDIT_HEAD, CREDIT_SEP]
-    key = (item.strip(), url.strip())
+def _credit_block(lines: list):
+    """(first_row, end) of the credits table body — other tables in the same file (the fact-check table) are not part of it."""
     for i, ln in enumerate(lines):
-        if _is_data_row(ln) and tuple(_split_row(ln)[:2]) == key:
-            lines[i] = row
-            break
-    else:
-        lines.append(row)
-    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if ln.strip() == CREDIT_HEAD:
+            j = i + 1
+            if j < len(lines) and re.match(r"^\|\s*-{2,}", lines[j].strip()):
+                j += 1
+            start = j
+            while j < len(lines) and lines[j].lstrip().startswith("|"):
+                j += 1
+            return start, j
+    return None
+
+
+def credit(file, item: str, url: str, license_name: str, ads_ok: bool, note: str = "") -> Path:
+    """Add one row to the credits table of CREDITS.md (header written once). Same item+url again -> that row is replaced."""
+    f = Path(file)
+    row = f"| {_cell(item)} | {_cell(url)} | {_cell(license_name)} | {YES if ads_ok else NO} | {_cell(note)} |"
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+        if _credit_block(lines) is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            elif not lines:
+                lines += [CREDIT_TITLE, "", CREDIT_INTRO, ""]
+            lines += [CREDIT_HEAD, CREDIT_SEP]
+        start, end = _credit_block(lines)
+        key = (item.strip(), url.strip())
+        for i in range(start, end):
+            if _is_data_row(lines[i]) and tuple(_split_row(lines[i])[:2]) == key:
+                lines[i] = row
+                break
+        else:
+            lines.insert(end, row)
+        f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as e:
+        raise KitError(f"เขียน {f.name} ไม่ได้ ({e.strerror or e}) — เช็คว่าโฟลเดอร์ {f.parent} มีอยู่ ไฟล์ไม่ได้เปิดค้างในโปรแกรมอื่น และมีสิทธิ์เขียน") from None
     return f
 
 
@@ -369,7 +401,12 @@ def credits_summary(file) -> dict:
     f = Path(file)
     if not f.exists():
         raise KitError(f"ไม่พบ {f}")
-    rows = [_split_row(ln) for ln in f.read_text(encoding="utf-8").splitlines() if _is_data_row(ln)]
+    try:
+        lines = f.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        raise KitError(f"อ่าน {f.name} ไม่ได้ ({e.strerror or e})") from None
+    block = _credit_block(lines)
+    rows = [_split_row(ln) for ln in lines[block[0]:block[1]] if _is_data_row(ln)] if block else []
     bad = [r[0] for r in rows if r[3] != YES]
     return {"total": len(rows), "ads_ok": len(rows) - len(bad), "ads_not_ok": len(bad), "not_ok_items": bad}
 
@@ -455,6 +492,9 @@ def main(argv=None) -> int:
                     print("ห้ามเอาไปยิงแอด (ต้องเปลี่ยนก่อนถ้าจะโปรโมต): " + " · ".join(s["not_ok_items"]))
     except KitError as e:
         print(f"ผิดพลาด: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"ผิดพลาด: อ่านหรือเขียนไฟล์ไม่ได้ ({e.filename or ''}: {e.strerror or e}) — เช็คว่าโฟลเดอร์มีอยู่ ไฟล์ไม่ได้เปิดค้าง และมีสิทธิ์เขียน", file=sys.stderr)
         return 1
     return 0
 

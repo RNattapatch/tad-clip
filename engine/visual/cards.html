@@ -447,7 +447,7 @@ function overlay(c) {
 }
 
 // layout = which part of the frame shows the speaker (filled with matte green in 'green' renders)
-const SPEAKER_ZONE = { split: [960, 960], cutout: null, 'full-speaker': [0, 1920], 'full-pun': [0, 1920], 'full-card': null, proof: null };
+const SPEAKER_ZONE = { split: [960, 960], cutout: null, 'full-speaker': [0, 1920], 'full-card': null, proof: null };   // thv.mjs renames legacy layouts before they get here
 const who = () => esc((window.JOB && window.JOB.speaker) || 'ผู้พูด');
 
 function buildFrame(shot, opts) {
@@ -464,7 +464,7 @@ function buildFrame(shot, opts) {
   fr.style.setProperty('--shot-dur', ((shot.t[1] - shot.t[0]) || 4) + 's');
   const top = layout === 'split' ? 960 : 1920;
   // background visual region
-  if (layout !== 'full-pun') {
+  if (layout !== 'full-speaker') {
     const region = h('div', 'region' + (top === 1920 ? ' tall' : '') + (opts.faceSlot && shot.face !== false && layout === 'full-card' ? ' face' : '')); region.style.top = 0; region.style.height = top + 'px';
     if (opts.bgImage && v0.treat === 'print') {   // photo laid on paper: white border, slight tilt, drifts
       region.appendChild(h('div', 'vx-paper')); const pr = h('div', 'print'), im = h('div');
@@ -490,7 +490,7 @@ function buildFrame(shot, opts) {
   if (layout === 'full-card' && opts.placeholder && opts.faceSlot && shot.face !== false) fr.appendChild(h('div', 'face-slot'));
   if (layout === 'cutout' && opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()} (ตัดพื้น)</span>`); Object.assign(p.style, { left: '240px', width: '600px', top: '1260px', height: '660px', borderRadius: '300px 300px 0 0', opacity: .92 }); fr.appendChild(p); }
   (shot.overlays || []).forEach(c => { const e = overlay(c); if (e) fr.appendChild(e); });
-  // overlay-only render on a full-pun / proof shot: matte the whole frame so CapCut keys it out
+  // overlay-only render on a full-speaker / proof shot: matte the whole frame so CapCut keys it out
   if (opts.matte === 'green' && !opts.bgImage && !(shot.visual && (shot.visual.card || shot.visual.panel)) && layout !== 'split') fr.classList.add('matte-green');
   return fr;
 }

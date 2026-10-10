@@ -83,15 +83,19 @@ def extract_audio(src, wav, start_s=None, dur_s=None):
 def build_raw(d, name, max_chars=None, karaoke=False, force=False, cfg=None):
     """asr.json -> raw.cues.json, raw.srt, review.md (and raw.karaoke.ass). Returns True when it (re)built.
 
-    Skipped when raw.cues.json already matches the same max_chars + glossary (unless force), so a re-run never
+    Skipped when raw.cues.json already matches the same asr.json + max_chars + glossary (unless force), so a re-run never
     rewrites what is on disk for nothing. edits.json is never touched."""
     d = Path(d)
     cfg = cfg or kit.load_config()
     max_chars = int(max_chars or cfg["subtitle"]["max_chars"])
     glossary = ms.load_glossary(cfg.get("glossary"))
+    asr_p = d / "asr.json"
+    if not asr_p.is_file():
+        raise kit.KitError(f"ไม่พบ asr.json ใน {d} — รัน `python -m engine.subs <คลิป> -o \"{d}\"` เพื่อถอดเสียงก่อน")
+    asr_sha = hashlib.sha1(asr_p.read_bytes()).hexdigest()       # a replaced or re-made asr.json must rebuild the cues
     knobs = [ms.ALGO_VERSION, ms.MINCH, ms.GAP, ms.MINDUR, ms.MAXDUR, ms.LEAD, ms.TARGET, sorted(ms.DANGLE)]
-    fp = hashlib.sha1(json.dumps({"max_chars": max_chars, "glossary": glossary, "knobs": knobs}, sort_keys=True,
-                                 ensure_ascii=False).encode("utf-8")).hexdigest()
+    fp = hashlib.sha1(json.dumps({"max_chars": max_chars, "glossary": glossary, "knobs": knobs, "asr": asr_sha},
+                                 sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     raw_p, review_p = d / "raw.cues.json", d / "review.md"
     old = None
     if raw_p.exists() and not force:
@@ -102,7 +106,7 @@ def build_raw(d, name, max_chars=None, karaoke=False, force=False, cfg=None):
     if old and old.get("meta", {}).get("fingerprint") == fp and review_p.exists() and (d / "raw.srt").exists():
         return False
 
-    asr = ms.load_asr(d / "asr.json")
+    asr = ms.load_asr(asr_p)
     if not isinstance(asr, dict) or "transcription" not in asr:
         raise kit.KitError(f"asr.json ใน {d} ไม่ใช่ผลถอดเสียงที่ถูกต้อง — ลบไฟล์นี้แล้วรันใหม่ หรือใช้ --force")
     cues, applied = ms.build_cues(asr, glossary, max_chars)

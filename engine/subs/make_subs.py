@@ -23,7 +23,7 @@ MAXDUR = 2400   # longest cue before the cost grows
 LEAD = 160      # ASR onsets come later than the real sound, so every cue is pulled earlier
 TARGET = 18     # preferred characters per cue
 
-ALGO_VERSION = 2    # bump whenever chunk() would produce different cues; a re-run then rebuilds old raw cues
+ALGO_VERSION = 3    # bump whenever chunk() would produce different cues; a re-run then rebuilds old raw cues
 
 # Joiners that must not end a cue.
 DANGLE = set("และ แล้ว ที่ ซึ่ง จะ กับ ใน ก็ ให้ ของ เป็น ได้ มา ไป ว่า จาก ด้วย เพื่อ แต่ "
@@ -259,29 +259,24 @@ def _dp(ws, maxch):
 
 
 def _spaced(t):
-    t = re.sub(r"(?<=[฀-๿])(?=[A-Za-z0-9])", " ", t)
-    return re.sub(r"(?<=[A-Za-z0-9])(?=[฀-๿])", " ", t)
+    t = re.sub(r"(?<=[\u0E00-\u0E7F])(?=[A-Za-z0-9])", " ", t)
+    return re.sub(r"(?<=[A-Za-z0-9])(?=[\u0E00-\u0E7F])", " ", t)
 
 
 def is_dangle(t):
-    """A joiner from DANGLE, or a word made only of joiners such as "ที่จะ" (newmm returns it as one word)."""
-    t = t.strip()
-    ok = [True] + [False] * len(t)
-    for i in range(len(t)):
-        if ok[i]:
-            for j in range(i + 1, len(t) + 1):
-                if t[i:j] in DANGLE:
-                    ok[j] = True
-    return bool(t) and ok[len(t)]
+    """True when the word is exactly one of the joiners in DANGLE. Compounds such as "ไปแล้ว", "ทำได้", "ไม่มี",
+    "ไม่ได้" or "ที่จะ" are not joiners: they end sentences, so they are never matched."""
+    return t.strip() in DANGLE
 
 
 def _fix_edges(groups, maxch):
     """Clean up the cue edges the DP can leave behind, on words (so text and word times stay in step).
 
-    A leading "ๆ" / "ฯ" goes back to the previous cue; a joiner from DANGLE hanging at the end of a cue moves to
-    the front of the next one while that cue still fits in maxch. The DP only discourages these (a long breath
-    after the joiner can outweigh the penalty). The original did this on the cue text, which never fired for Thai
-    because Thai text has no spaces to split on."""
+    A leading "ๆ" / "ฯ" goes back to the previous cue. A joiner from DANGLE hanging at the end of a cue moves to
+    the front of the next one while that cue still fits in maxch, but only when the speaker did not stop after it:
+    a silence of GAP ms or more means the word ends its sentence, so it stays where it is. The DP only
+    discourages hanging joiners (a long breath after one can outweigh the penalty). The original did this on the
+    cue text, which never fired for Thai because Thai text has no spaces to split on."""
     for gi in range(1, len(groups)):
         while len(groups[gi]) > 1 and groups[gi][0]["t"].strip() in ("ๆ", "ฯ"):
             groups[gi - 1].append(groups[gi].pop(0))
@@ -289,7 +284,10 @@ def _fix_edges(groups, maxch):
         while True:
             g, nxt = groups[gi], groups[gi + 1]
             k = max((i for i, w in enumerate(g) if w["t"].strip()), default=0)
-            if k == 0 or not is_dangle(g[k]["t"]):
+            first = next((w for w in nxt if w["t"].strip()), None)
+            if k == 0 or first is None or not is_dangle(g[k]["t"]):
+                break
+            if first["f"] - g[k]["to"] >= GAP:        # a real stop: the word ends its sentence
                 break
             moved = g[k:]
             if _vis(moved + nxt, 0, len(moved) + len(nxt)) > maxch:
@@ -324,6 +322,9 @@ def chunk(blocks, glue_list, maxch):
             c["to"] = c["f"] + MINDUR
         if i + 1 < len(cues) and c["to"] > cues[i + 1]["f"]:
             c["to"] = max(c["f"] + 200, cues[i + 1]["f"] - 20)
+    for a, b in zip(cues, cues[1:]):             # the 200 ms floors above must never run a cue into the next one
+        if a["to"] > b["f"]:
+            a["to"] = b["f"]
     return cues
 
 
@@ -336,7 +337,7 @@ def build_cues(asr, glossary, max_chars):
 # ── karaoke words ──────────────────────────────────────────────────────────────────────────
 
 def _is_thai(ch):
-    return "฀" <= ch <= "๿"
+    return "\u0E00" <= ch <= "\u0E7F"
 
 
 def _realign(toks, text, pieces=None):

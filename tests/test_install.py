@@ -238,7 +238,7 @@ def test_default_model_respects_config_then_ram(monkeypatch):
     monkeypatch.setattr(inst, "ram_bytes", lambda: 16 * 1024 ** 3)
     assert setup.choose_model(None) == "large-v3"
     monkeypatch.setattr(inst, "ram_bytes", lambda: 4 * 1024 ** 3)
-    assert setup.choose_model(None) == "large-v3-turbo"
+    assert setup.choose_model(None) == "medium"
     kit.save_config({"whisper": {"model": "medium"}})
     assert setup.choose_model(None) == "medium"
     assert setup.choose_model("base") == "base"
@@ -260,3 +260,69 @@ def test_setup_without_yes_and_no_tty_shows_plan_and_exits_2(tmp_home):
     assert res.returncode == 2, res.stdout + res.stderr
     assert "--yes" in res.stdout and "base" in res.stdout
     assert not (tmp_home / "venv").exists()  # nothing was installed
+
+
+# ---------------------------------------------------------------- browser choice
+def _browser_env(monkeypatch, cands, works, mac, download="/home/chrome/155/chrome-headless-shell-mac-arm64/chrome-headless-shell"):
+    tried, downloads = [], []
+    monkeypatch.setattr(kit, "IS_MAC", mac)
+    monkeypatch.setattr(inst, "chrome_candidates", lambda: list(cands))
+    monkeypatch.setattr(inst, "chrome_ready", lambda b, t=20: (tried.append(b) or (b in works), "เปิดแล้วไม่ตอบภายใน 20 วิ"))
+    monkeypatch.setattr(setup, "_download_shell", lambda node: downloads.append(node) or download)
+    return tried, downloads
+
+
+GOOGLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def test_mac_prefers_downloading_the_headless_shell_over_google_chrome(monkeypatch):
+    shell = "/home/chrome/155/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+    tried, downloads = _browser_env(monkeypatch, [GOOGLE], {GOOGLE, shell}, mac=True)
+    assert setup.ensure_chrome("node") == shell
+    assert downloads == ["node"] and GOOGLE not in tried
+
+
+def test_mac_falls_back_to_google_chrome_when_download_fails(monkeypatch):
+    tried, downloads = _browser_env(monkeypatch, [GOOGLE], {GOOGLE}, mac=True, download=None)
+    assert setup.ensure_chrome("node") == GOOGLE
+
+
+def test_windows_uses_edge_without_downloading(monkeypatch):
+    edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    tried, downloads = _browser_env(monkeypatch, [edge], {edge}, mac=False)
+    assert setup.ensure_chrome("node") == edge and downloads == []
+
+
+def test_no_working_browser_is_a_thai_error(monkeypatch):
+    _browser_env(monkeypatch, [GOOGLE], set(), mac=False, download=None)
+    with pytest.raises(kit.KitError, match="เบราว์เซอร์"):
+        setup.ensure_chrome("node")
+
+
+# ---------------------------------------------------------------- whisper on an NVIDIA card (Windows)
+def test_cuda_libs_installed_and_verified(monkeypatch, tmp_path):
+    site = tmp_path / "site packages"
+    site.mkdir()
+    pips, runs = [], []
+    monkeypatch.setattr(setup, "pip", lambda uv, py, args, what: pips.append(list(map(str, args))))
+    monkeypatch.setattr(setup, "_site_packages", lambda py: site)
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: runs.append(cmd) or (0, "cuda ok"))
+    assert setup.setup_cuda("uv", Path("py"), "base") == "cuda"
+    assert pips and "nvidia-cublas-cu12" in pips[0] and any(a.startswith("nvidia-cudnn-cu12") for a in pips[0])
+    pth = (site / "tadclip-cuda.pth").read_text(encoding="utf-8")
+    assert pth.startswith("import ") and "add_dll_directory" in pth and "\n" not in pth.strip()
+    assert any("cuda" in " ".join(map(str, c)) for c in runs)
+
+
+def test_cuda_that_fails_falls_back_to_cpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup, "pip", lambda *a, **k: None)
+    monkeypatch.setattr(setup, "_site_packages", lambda py: tmp_path)
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: (1, "Library cublas64_12.dll is not found"))
+    assert setup.setup_cuda("uv", Path("py"), "base") == "cpu"
+
+
+def test_plan_mentions_cuda_libs_on_windows_with_nvidia():
+    lines, mb = setup.plan("windows", "large-v3", with_cutout=False, gpu="NVIDIA GeForce RTX 3060", have={})
+    assert any("CUDA" in line for line in lines)
+    lines2, mb2 = setup.plan("windows", "large-v3", with_cutout=False, gpu=None, have={})
+    assert not any("CUDA" in line for line in lines2) and mb > mb2

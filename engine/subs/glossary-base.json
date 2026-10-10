@@ -1,6 +1,6 @@
 {
  "_": "Generic Thai/tech glossary shipped with the kit. Used three ways: (1) prompt_hint goes to the ASR as initial prompt so common terms are heard right; (2) fixes are replaced automatically after transcription; (3) glue = phrases never split across two cues; protect = spellings that review.md asks Claude to double-check. Personal words go in ~/.tad-clip/config.json under glossary (same four keys) and are merged on top of this file.",
- "prompt_hint": "Claude Code, ChatGPT, Gemini, AI Agent, Prompt, Workflow, Automation, LINE OA, CRM, In-house, SME, B2B",
+ "prompt_hint": "คลิปพูดภาษาไทยเรื่องธุรกิจ การขาย การตลาด ลูกค้า ทีมงาน และเครื่องมือ AI เช่น Claude Code, ChatGPT, Gemini, AI Agent",
  "fixes": [
   ["Core Code", "Claude Code"],
   ["Core code", "Claude Code"],
