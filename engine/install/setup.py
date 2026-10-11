@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -22,6 +23,7 @@ from engine.install import mac, windows  # noqa: E402
 HERE = Path(__file__).resolve().parent
 PY_VERSION = "3.12"
 DEFAULT_MODEL = "large-v3"
+MODELS = ("large-v3", "medium", "small", "base", "tiny")   # what setup offers; large-v3-turbo transcribes Thai badly
 GB = 1024 ** 3
 CHROME_TIMEOUT = 20   # same limit as doctor
 # approximate disk use in MB (installed), for the plan shown before anything is downloaded
@@ -50,21 +52,39 @@ def say(msg: str = "") -> None:
     print(msg, flush=True)
 
 
+def read_raw_config() -> dict:
+    """The user's own config.json. A file that is not valid JSON is kept as config.json.broken-<time> (the user's
+    name, colours and glossary are still in there) and setup carries on from the defaults."""
+    f = kit.home() / "config.json"
+    if not f.exists():
+        return {}
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except (ValueError, UnicodeDecodeError):
+        pass
+    backup = f.with_name(f"config.json.broken-{time.strftime('%Y%m%d-%H%M%S')}")
+    os.replace(f, backup)
+    say(f"⚠️ ไฟล์ตั้งค่า config.json เปิดไม่ได้ (เนื้อในเสีย) — เก็บไว้เป็น {backup.name} แล้วเริ่มจากค่าเริ่มต้น\n"
+        f"   ชื่อ สี และคำศัพท์ที่เคยตั้งไว้ยังอยู่ในไฟล์นั้น ให้ Claude ย้ายกลับมาได้ (skill tad-clip-setup ข้อ B)")
+    return {}
+
+
 def choose_model(arg) -> str:
     if arg:
         return arg
-    f = kit.home() / "config.json"
-    raw = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-    configured = (raw.get("whisper") or {}).get("model")
-    if configured:
+    configured = (read_raw_config().get("whisper") or {}).get("model")
+    if configured in MODELS:
         return configured
+    if configured:
+        say(f"⚠️ โมเดล {configured} ในไฟล์ตั้งค่าไม่อยู่ในชุดที่รองรับ ({' · '.join(MODELS)}) — ใช้ค่าเริ่มต้นแทน")
     return inst.LIGHT_MODEL if inst.low_ram(inst.ram_bytes()) else DEFAULT_MODEL
 
 
 def update_config(tools: dict, model: str, device: str = None) -> None:
     """Write only what setup owns into the user's raw config (never the merged one: that would freeze preset colours)."""
-    f = kit.home() / "config.json"
-    raw = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    raw = read_raw_config()
     raw.setdefault("version", 1)
     raw["tools"] = {**(raw.get("tools") or {}), **tools}
     raw["whisper"] = {**(raw.get("whisper") or {}), "model": model, **({"device": device} if device else {})}
@@ -84,10 +104,11 @@ def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict, cuda: bool = 
         else:
             lines.append(f"- {label} {how} (~{sizes[k]} MB)")
             total += sizes[k]
+    pkgs = "pythainlp + faster-whisper (สำรอง)" if osn == "mac" else "faster-whisper + pythainlp"
     if kit.venv_python().exists():
-        lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp: มีแล้ว (เช็คแพ็กเกจให้ครบ)")
+        lines.append(f"- Python {PY_VERSION} + {pkgs}: มีแล้ว (เช็คแพ็กเกจให้ครบ)")
     else:
-        lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp ใน {kit.home() / 'venv'} (~{VENV_MB} MB)")
+        lines.append(f"- Python {PY_VERSION} + {pkgs} ใน {kit.home() / 'venv'} (~{VENV_MB} MB)")
         total += VENV_MB
     if osn == "mac" and inst.asr_backend() == "whispercpp":
         mb = inst.GGML_BYTES.get(model, 3_100_000_000) / 1e6
@@ -118,8 +139,22 @@ def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict, cuda: bool = 
     return lines, total
 
 
+def kit_dirs() -> dict:
+    """Everything the installer downloads stays inside <home>, so deleting ~/.tad-clip really frees the space:
+    uv's cache and its Python builds, torch / Hugging Face caches, transparent-background's weights."""
+    h, c = kit.home(), kit.home() / "cache"
+    return {
+        "UV_CACHE_DIR": str(c / "uv"), "UV_PYTHON_INSTALL_DIR": str(h / "python"),
+        "UV_PYTHON_BIN_DIR": str(h / "python" / "bin"), "UV_TOOL_DIR": str(h / "uv-tools"),
+        "UV_TOOL_BIN_DIR": str(h / "uv-tools" / "bin"), "UV_PYTHON_INSTALL_REGISTRY": "0",   # no Windows registry entries
+        "TORCH_HOME": str(c / "torch"), "HF_HOME": str(c / "huggingface"),
+        "TRANSPARENT_BACKGROUND_FILE_PATH": str(h),   # weights → <home>/.transparent-background/
+    }
+
+
 def _env() -> dict:
     env = dict(os.environ)
+    env.update(kit_dirs())
     env.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     env.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -255,7 +290,7 @@ def main(argv=None) -> int:
     ap.add_argument("--yes", action="store_true", help="ติดตั้งเลยไม่ต้องถาม")
     ap.add_argument("--with-cutout", action="store_true", help="ติดตั้งตัวตัดพื้นหลัง transparent-background เพิ่ม")
     ap.add_argument("--no-cuda", action="store_true", help="ไม่ใช้การ์ดจอ NVIDIA ถอดเสียง (Windows)")
-    ap.add_argument("--model", help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 · เครื่อง RAM น้อยกว่า 8 GB ใช้ medium)")
+    ap.add_argument("--model", choices=MODELS, help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 · เครื่อง RAM น้อยกว่า 8 GB ใช้ medium)")
     a = ap.parse_args(argv)
 
     osn = inst.os_name()
@@ -263,6 +298,7 @@ def main(argv=None) -> int:
         say("tad-clip รองรับ macOS และ Windows เท่านั้น")
         return 1
     try:
+        read_raw_config()   # a broken config.json is set aside (and the user told) before anything else
         model = choose_model(a.model)
         gpu = inst.nvidia_gpu() if osn == "windows" else None
         if osn == "mac":
@@ -313,6 +349,10 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         say("\nหยุดกลางทาง — สั่งติดตั้งใหม่ได้ มันจะทำต่อจากที่ค้าง")
         return 130
+    except (OSError, ValueError) as e:   # last net: an installer the user cannot read must never end in a traceback
+        say(f"\n❌ ติดตั้งสะดุด ({type(e).__name__}: {e})\nรันคำสั่งเดิมอีกครั้งได้เลย ของที่ลงแล้วจะข้าม · "
+            f"ถ้ายังเจอซ้ำ ให้ Claude อ่านข้อความนี้: {inst.setup_command()}")
+        return 1
 
     say("\n[5/5] ตรวจเครื่อง\n")
     return subprocess.call([sys.executable, str(kit.KIT_ROOT / "engine" / "doctor.py")], env=_env())

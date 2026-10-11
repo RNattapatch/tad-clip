@@ -156,9 +156,9 @@ def test_model_present_is_green(fw):
     assert c["status"] == "ok", c
 
 
-def test_turbo_model_maps_to_its_repo(fw):
-    kit.save_config({"whisper": {"model": "large-v3-turbo"}})
-    _fake_model(kit.models_dir(), "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo")
+def test_medium_model_maps_to_its_repo(fw):
+    kit.save_config({"whisper": {"model": "medium"}})
+    _fake_model(kit.models_dir(), "models--Systran--faster-whisper-medium")
     assert doctor.check_model()["status"] == "ok"
 
 
@@ -220,12 +220,12 @@ def test_asr_check_runs_whisper_cli(wcpp, tmp_path):
     assert c["status"] == "ok" and "whisper.cpp" in c["detail"]
 
 
-def test_asr_check_missing_whisper_cli_is_red_with_brew_fix(wcpp, tmp_path, monkeypatch):
+def test_asr_check_missing_whisper_cli_is_red_and_setup_installs_it(wcpp, tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "_os", lambda: "mac")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     c = doctor.check_asr()
-    assert c["status"] == "fail"
-    assert "brew install whisper-cpp" in c["fix"]
+    assert c["status"] == "fail" and "whisper.cpp" in c["detail"]
+    assert "setup.py" in c["fix"]          # setup brew-installs whisper-cpp when it is missing
 
 
 def test_asr_check_faster_whisper_names_the_device(fw):
@@ -429,3 +429,105 @@ def test_qc_cli_json(tmp_path, qc_tools, tmp_home):
     report = json.loads(res.stdout)
     assert report["mode"] == "qc" and report["ok"] is True and res.returncode == 0
     assert [c["id"] for c in report["checks"]] == QC_IDS
+
+
+
+# ================================================================ fix round 1
+def test_mac_fix_lines_rerun_setup_instead_of_bare_brew(monkeypatch, tmp_path):
+    """Homebrew's bin is often not on PATH right after installing it → never print a bare `brew`."""
+    monkeypatch.setattr(doctor, "_os", lambda: "mac")
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    kit.save_config({"tools": {"ffmpeg": str(tmp_path / "gone")}})
+    rows = [doctor.check_ffmpeg(), doctor.check_ffprobe(), doctor.check_node(), doctor.check_ytdlp(), doctor.check_asr()]
+    for c in rows:
+        assert c["status"] == "fail", c
+        assert "setup.py" in c["fix"], c
+        assert not c["fix"].startswith("brew ") and " brew install" not in c["fix"], c
+
+
+def test_windows_ffmpeg_that_does_not_answer_mentions_antivirus(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "_os", lambda: "windows")
+    kit.save_config({"tools": {"ffmpeg": fake_exe(tmp_path / "bin", "ffmpeg", "sys.exit(1)\n")}})
+    c = doctor.check_ffmpeg()
+    assert c["status"] == "fail" and "กันไวรัส" in c["detail"]
+
+
+def test_python_row_on_whispercpp_mac_does_not_claim_faster_whisper(monkeypatch):
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+    assert "faster-whisper" not in doctor.check_python(quick=True)["name"]
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "faster-whisper")
+    assert "faster-whisper" in doctor.check_python(quick=True)["name"]
+
+
+@needs_ffmpeg
+def test_qc_takes_the_expected_duration_from_roughcut_mp4_next_to_it(tmp_path, qc_tools):
+    w = tmp_path / "tad-clip-คลิป ทดสอบ"
+    _make(w / "roughcut.mp4", "testsrc2=s=720x1280:r=30", "sine=f=440:sample_rate=48000", dur=2)
+    final = _make(w / "final.mp4", "testsrc2=s=1080x1920:r=30", "sine=f=440:sample_rate=48000", dur=2)
+    c = by_id(doctor.qc(str(final)))
+    assert c["duration"]["status"] == "ok" and "roughcut.mp4" in c["duration"]["detail"]
+
+
+@needs_ffmpeg
+def test_qc_finds_roughcut_in_the_parent_work_folder_and_catches_a_short_render(tmp_path, qc_tools):
+    w = tmp_path / "tad-clip-x"
+    _make(w / "roughcut.mp4", "testsrc2=s=720x1280:r=30", "sine=f=440:sample_rate=48000", dur=3)
+    short = _make(w / "out" / "preview-composite-subs.mp4", "testsrc2=s=1080x1920:r=30", "sine=f=440:sample_rate=48000", dur=2)
+    c = by_id(doctor.qc(str(short)))
+    assert c["duration"]["status"] == "fail" and "roughcut.mp4" in c["duration"]["detail"]
+
+
+@needs_ffmpeg
+def test_qc_without_roughcut_or_expectation_only_reports(tmp_path, qc_tools):
+    v = _make(tmp_path / "เดี่ยว" / "clip.mp4", "testsrc2=s=1080x1920:r=30", "sine=f=440:sample_rate=48000", dur=2)
+    assert by_id(doctor.qc(str(v)))["duration"]["status"] == "info"
+
+
+# ---------------------------------------------------------------- --probe (orchestrator asks before anything else)
+FIXTURE = ROOT / "tests" / "fixtures" / "คลิป ทดสอบ.mp4"
+PROBE_KEYS = {"file", "duration", "width", "height", "fps_avg", "fps_variable", "codec", "hdr", "size_bytes",
+              "free_video_bytes", "free_home_bytes", "need_bytes", "space_ok"}
+
+
+@needs_ffmpeg
+def test_probe_on_the_thai_fixture(qc_tools):
+    p = doctor.probe(str(FIXTURE))
+    assert set(p) == PROBE_KEYS
+    assert abs(p["duration"] - 21.6) < 0.1
+    assert (p["width"], p["height"]) == (720, 1280)
+    assert round(p["fps_avg"]) == 60 and p["codec"] == "hevc" and p["hdr"] is False
+    assert p["size_bytes"] == FIXTURE.stat().st_size
+    assert p["need_bytes"] == 3 * p["size_bytes"] + 5 * 1024 ** 3
+
+
+@needs_ffmpeg
+def test_probe_cli_text_and_json(tmp_home, qc_tools):
+    res = run_doctor("--probe", str(FIXTURE), env_home=tmp_home)
+    assert res.returncode == 0, res.stderr
+    out = res.stdout
+    assert "21.6" in out and "720×1280" in out and "HEVC" in out and "HDR" in out and "60" in out
+    js = json.loads(run_doctor("--probe", str(FIXTURE), "--json", env_home=tmp_home).stdout)
+    assert js["mode"] == "probe" and set(js["probe"]) == PROBE_KEYS
+
+
+@needs_ffmpeg
+def test_probe_warns_when_disk_is_tight(qc_tools, monkeypatch, capsys):
+    monkeypatch.setattr(inst, "free_bytes", lambda p: 2 * 1024 ** 3)
+    p = doctor.probe(str(FIXTURE))
+    assert p["space_ok"] is False
+    print(doctor.render_probe(p))
+    assert "⚠️" in capsys.readouterr().out
+
+
+def test_probe_detects_hdr_and_variable_fps_from_stream_info():
+    s = {"codec_name": "hevc", "width": 1080, "height": 1920, "avg_frame_rate": "30000/1001", "r_frame_rate": "60/1",
+         "color_transfer": "arib-std-b67"}
+    assert doctor.stream_traits(s) == {"fps_avg": pytest.approx(29.97, abs=0.01), "fps_variable": True, "hdr": True}
+    s.update(color_transfer="bt709", r_frame_rate="30000/1001")
+    assert doctor.stream_traits(s) == {"fps_avg": pytest.approx(29.97, abs=0.01), "fps_variable": False, "hdr": False}
+
+
+def test_probe_missing_file_is_a_thai_error_not_a_traceback(tmp_home):
+    res = run_doctor("--probe", str(tmp_home / "ไม่มี ไฟล์.mp4"), env_home=tmp_home)
+    assert res.returncode == 1 and "ไม่พบไฟล์" in res.stdout and "Traceback" not in res.stderr

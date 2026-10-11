@@ -3,7 +3,8 @@
   python engine/doctor.py                    # full check, Thai table + one fix command per problem
   python engine/doctor.py --quick            # fast: files exist (used before every "ตัดคลิป")
   python engine/doctor.py --json             # same data for machines (schema version 1)
-  python engine/doctor.py --qc final.mp4 [--expect-duration 14.2]
+  python engine/doctor.py --qc final.mp4 [--expect-duration 14.2]   # no --expect-duration → roughcut.mp4 next to it
+  python engine/doctor.py --probe "<video>" [--json]                # what is this clip + is there disk space for it
 
 Standard library only and Python 3.9+, so it runs before the venv exists. Exit 0 = nothing red.
 """
@@ -56,8 +57,17 @@ def _tool(name: str):
         return None, "อ่านไฟล์ตั้งค่าไม่ได้"
 
 
-def _brew_fix(formula: str) -> str:
-    return f"brew install {formula} && {inst.setup_command()}"
+def _fix() -> str:
+    """Every missing or broken tool is fixed by re-running setup: it installs only what is missing and records the
+    paths. (A bare `brew …` would fail right after a Homebrew install, while brew is not on PATH yet.)"""
+    return inst.setup_command()
+
+
+AV_HINT = " (โปรแกรมกันไวรัสอาจกักไฟล์ไว้ — เปิด Windows Security ดูประวัติการป้องกันแล้วกดอนุญาต)"
+
+
+def _no_answer(exe: str) -> str:
+    return f"เรียก {exe} แล้วไม่ตอบ" + (AV_HINT if _os() == "windows" else "")
 
 
 # ---------------------------------------------------------------- checks
@@ -78,7 +88,7 @@ def check_setup() -> dict:
 
 def check_ffmpeg(quick: bool = False) -> dict:
     name = "ffmpeg (ตัดต่อ + ฝังซับ)"
-    fix = _brew_fix("ffmpeg-full") if _os() == "mac" else inst.setup_command()
+    fix = _fix()
     ff, why = _tool("ffmpeg")
     if not ff:
         return item("ffmpeg", name, "fail", why, fix)
@@ -86,7 +96,7 @@ def check_ffmpeg(quick: bool = False) -> dict:
         return item("ffmpeg", name, "ok", ff)
     filters = inst.ffmpeg_filters(ff)
     if not filters:
-        return item("ffmpeg", name, "fail", f"เรียก {ff} แล้วไม่ตอบ", fix)
+        return item("ffmpeg", name, "fail", _no_answer(ff), fix)
     label, new_enough = inst.ffmpeg_version(ff)
     if not new_enough:
         need = ".".join(map(str, inst.FFMPEG_MIN))
@@ -100,20 +110,20 @@ def check_ffmpeg(quick: bool = False) -> dict:
 
 def check_ffprobe(quick: bool = False) -> dict:
     name = "ffprobe (อ่านข้อมูลไฟล์)"
-    fix = _brew_fix("ffmpeg-full") if _os() == "mac" else inst.setup_command()
+    fix = _fix()
     fp, why = _tool("ffprobe")
     if not fp:
         return item("ffprobe", name, "fail", why, fix)
     if not quick:
         code, _ = inst._out([fp, "-version"], timeout=30)
         if code != 0:
-            return item("ffprobe", name, "fail", f"เรียก {fp} แล้วไม่ตอบ", fix)
+            return item("ffprobe", name, "fail", _no_answer(fp), fix)
     return item("ffprobe", name, "ok", fp)
 
 
 def check_node(quick: bool = False) -> dict:
     name = f"Node.js {inst.NODE_MIN}+"
-    fix = _brew_fix("node") if _os() == "mac" else inst.setup_command()
+    fix = _fix()
     node, why = _tool("node")
     if not node:
         return item("node", name, "fail", why, fix)
@@ -121,14 +131,15 @@ def check_node(quick: bool = False) -> dict:
         return item("node", name, "ok", node)
     v = inst.node_version(node)
     if not v:
-        return item("node", name, "fail", f"เรียก {node} แล้วไม่ตอบ", fix)
+        return item("node", name, "fail", _no_answer(node), fix)
     if int(v[1:].split(".")[0]) < inst.NODE_MIN:
         return item("node", name, "fail", f"ต้องการ Node {inst.NODE_MIN} ขึ้นไป (เครื่องนี้เป็น {v} ที่ {node})", fix)
     return item("node", name, "ok", f"{v} · {node}")
 
 
 def check_python(quick: bool = False) -> dict:
-    name = "Python + ตัวถอดเสียง (faster-whisper)"
+    # on a whisper.cpp Mac the venv still holds pythainlp etc. (and faster-whisper only as the fallback)
+    name = "Python + แพ็กเกจของ kit" if inst.asr_backend(_cfg()) == "whispercpp" else "Python + ตัวถอดเสียง (faster-whisper)"
     py = kit.venv_python()
     if not py.exists():
         return item("python", name, "fail", f"ยังไม่มี venv ที่ {py.parent.parent}", inst.setup_command())
@@ -159,7 +170,7 @@ def check_asr(quick: bool = False) -> dict:
     if backend != "whispercpp":
         device = cfg["whisper"].get("device") or "auto"
         return item("asr", name, "ok", f"faster-whisper · device {device}")
-    fix = _brew_fix("whisper-cpp") if _os() == "mac" else inst.setup_command()
+    fix = _fix()
     exe, why = _tool("whisper-cli")
     if not exe:
         return item("asr", name, "fail", f"{why} (whisper.cpp)", fix)
@@ -205,14 +216,13 @@ def check_chrome(quick: bool = False) -> dict:
 
 def check_ytdlp() -> dict:
     name = "yt-dlp (โหลดคลิปจากเว็บ)"
-    fix = _brew_fix("yt-dlp") if _os() == "mac" else inst.setup_command()
+    fix = _fix()
     exe, why = _tool("yt-dlp")
     if not exe:
         return item("ytdlp", name, "fail", why, fix)
     code, out = inst._out([exe, "--version"], timeout=90)
     if code != 0:
-        hint = " (โปรแกรมกันไวรัสอาจกักไฟล์ไว้)" if _os() == "windows" else ""
-        return item("ytdlp", name, "fail", f"เรียก {exe} แล้วไม่ตอบ{hint}", fix)
+        return item("ytdlp", name, "fail", _no_answer(exe), fix)
     return item("ytdlp", name, "ok", f"{out.strip().splitlines()[-1]} · {exe}")
 
 
@@ -295,22 +305,46 @@ def _scan(ff: str, video: str, has_audio: bool) -> tuple:
     return blacks, peak
 
 
+def _ffprobe(video: str) -> dict:
+    return json.loads(kit.run([kit.tool("ffprobe"), "-v", "error", "-print_format", "json", "-show_format",
+                               "-show_streams", video]).stdout)
+
+
+def _duration(info: dict) -> float:
+    return float(info.get("format", {}).get("duration") or 0)
+
+
+def roughcut_beside(video: str):
+    """The clip's work folder keeps roughcut.mp4 next to final.mp4 (out/… renders sit one level down)."""
+    v = Path(video).resolve()
+    for d in (v.parent, v.parent.parent):
+        rc = d / "roughcut.mp4"
+        if rc.is_file() and rc.resolve() != v:
+            return rc
+    return None
+
+
 def qc(video: str, expect_duration: float = None) -> list:
-    ff, fp = kit.tool("ffmpeg"), kit.tool("ffprobe")
-    info = json.loads(kit.run([fp, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", video]).stdout)
+    ff = kit.tool("ffmpeg")
+    info = _ffprobe(video)
     streams = info.get("streams", [])
     v = next((s for s in streams if s.get("codec_type") == "video"), None)
     has_audio = any(s.get("codec_type") == "audio" for s in streams)
-    dur = float(info.get("format", {}).get("duration") or 0)
+    dur = _duration(info)
     out = []
 
+    ref = ""
     if expect_duration is None:
-        out.append(item("duration", "ความยาว", "info", f"{dur:.2f} วิ"))
+        rc = roughcut_beside(video)
+        if rc:
+            expect_duration, ref = _duration(_ffprobe(str(rc))), f" เทียบกับ {rc.name}"
+    if expect_duration is None:
+        out.append(item("duration", "ความยาว", "info", f"{dur:.2f} วิ (ไม่มี roughcut.mp4 ให้เทียบ)"))
     elif abs(dur - expect_duration) <= QC_DURATION_TOL:
-        out.append(item("duration", "ความยาว", "ok", f"{dur:.2f} วิ (ควรได้ {expect_duration:.2f})"))
+        out.append(item("duration", "ความยาว", "ok", f"{dur:.2f} วิ (ควรได้ {expect_duration:.2f}{ref})"))
     else:
         out.append(item("duration", "ความยาว", "fail",
-                        f"{dur:.2f} วิ แต่ควรได้ {expect_duration:.2f} วิ (คลาด {dur - expect_duration:+.2f})",
+                        f"{dur:.2f} วิ แต่ควรได้ {expect_duration:.2f} วิ{ref} (คลาด {dur - expect_duration:+.2f})",
                         "เช็คว่า plan.json ครอบทั้งคลิป แล้วเรนเดอร์ใหม่"))
 
     if not v:
@@ -344,6 +378,59 @@ def qc(video: str, expect_duration: float = None) -> list:
     return out
 
 
+# ---------------------------------------------------------------- probe: what is this clip, is there room for it
+HDR_TRANSFERS = ("smpte2084", "arib-std-b67")   # PQ (HDR10 / Dolby Vision) and HLG (iPhone)
+
+
+def _rate(r: str) -> float:
+    try:
+        n, d = (r or "0/1").split("/")
+        return float(n) / float(d) if float(d) else 0.0
+    except ValueError:
+        return 0.0
+
+
+def stream_traits(s: dict) -> dict:
+    """fps (average), variable frame rate (average ≠ nominal by > 1 %), HDR (PQ/HLG transfer)."""
+    avg, nominal = _rate(s.get("avg_frame_rate")), _rate(s.get("r_frame_rate"))
+    vfr = bool(avg and nominal and abs(avg - nominal) / nominal > 0.01)
+    return {"fps_avg": round(avg, 3), "fps_variable": vfr, "hdr": s.get("color_transfer") in HDR_TRANSFERS}
+
+
+def probe(video: str) -> dict:
+    f = Path(video)
+    if not f.is_file():
+        raise kit.KitError(f"ไม่พบไฟล์ {video}")
+    info = _ffprobe(str(f))
+    v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video"), None)
+    if not v:
+        raise kit.KitError(f"ไฟล์ {f.name} ไม่มีภาพวิดีโอ")
+    size = f.stat().st_size
+    need = 3 * size + 5 * GB
+    free_video, free_home = inst.free_bytes(f.resolve().parent), inst.free_bytes(kit.home())
+    return {"file": str(f), "duration": round(_duration(info), 3), "width": int(v.get("width", 0)),
+            "height": int(v.get("height", 0)), **stream_traits(v), "codec": v.get("codec_name", "?"),
+            "size_bytes": size, "free_video_bytes": free_video, "free_home_bytes": free_home,
+            "need_bytes": need, "space_ok": free_video >= need}
+
+
+def _gb(n: int) -> str:
+    return f"{n / GB:.1f} GB" if n >= GB / 10 else f"{n / 1024 ** 2:.1f} MB"
+
+
+def render_probe(p: dict) -> str:
+    fps = f"{p['fps_avg']:g} fps " + ("(เฟรมเรตไม่คงที่ — จะทำให้คงที่ตอนตัด)" if p["fps_variable"] else "(คงที่)")
+    hdr = "HDR: ใช่ (จะแปลงเป็นสีปกติ SDR ให้ตอนตัด)" if p["hdr"] else "HDR: ไม่ใช่"
+    lines = [f"คลิป: {Path(p['file']).name}",
+             f"- ยาว {p['duration']:.1f} วิ · {p['width']}×{p['height']} · {fps} · {p['codec'].upper()} · {hdr} · ไฟล์ {_gb(p['size_bytes'])}",
+             f"- ที่ว่าง: ไดรฟ์ของคลิป {_gb(p['free_video_bytes'])} · ที่เก็บ kit {_gb(p['free_home_bytes'])} "
+             f"(คลิปนี้ควรมีที่ว่างอย่างน้อย {_gb(p['need_bytes'])})"]
+    if not p["space_ok"]:
+        lines.append(f"⚠️ ที่ว่างบนไดรฟ์ของคลิปน้อยกว่าที่ต้องใช้ ({_gb(p['free_video_bytes'])} จาก {_gb(p['need_bytes'])}) — "
+                     "ไฟล์ระหว่างทำงานอาจเขียนไม่ครบ ลบไฟล์ที่ไม่ใช้ หรือย้ายคลิปไปไดรฟ์ที่ว่างมากกว่า")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- output
 def _cell(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
@@ -368,7 +455,20 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="ผลลัพธ์เป็น JSON")
     ap.add_argument("--qc", metavar="VIDEO", help="ตรวจคลิปที่เรนเดอร์เสร็จแล้ว")
     ap.add_argument("--expect-duration", type=float, metavar="S", help="ความยาวที่ควรได้ (วินาที) สำหรับ --qc")
+    ap.add_argument("--probe", metavar="VIDEO", help="ดูข้อมูลคลิป (ยาว ขนาด fps HDR) และที่ว่างในเครื่อง")
     a = ap.parse_args(argv)
+
+    if a.probe:
+        try:
+            p = probe(a.probe)
+        except (kit.KitError, ValueError) as e:
+            msg = str(e).splitlines()[0]
+            print(json.dumps({"version": 1, "mode": "probe", "ok": False, "error": msg}, ensure_ascii=False)
+                  if a.json else f"❌ {msg}")
+            return 1
+        print(json.dumps({"version": 1, "mode": "probe", "ok": True, "probe": p}, ensure_ascii=False, indent=2)
+              if a.json else render_probe(p))
+        return 0
 
     if a.qc:
         mode, title = "qc", f"ตรวจคลิป {a.qc}"

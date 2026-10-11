@@ -1,12 +1,13 @@
 """End-to-end smoke test: the Thai-named fixture clip → final.mp4, through every engine CLI exactly as a skill runs them.
 
-  python tests/smoke/smoke.py [--work DIR] [--artifacts DIR] [--keep]
+  python tests/smoke/smoke.py [--work DIR] [--artifacts DIR] [--keep] [--allow-skip]
 
 fixture → roughcut phrases + render (drops chosen by time from tests/fixtures/README.md) → subs + finalize (no edits)
 → thv.mjs check/all/motion/compose/subs (title card, hook pill, and on macOS a real cut-out) → sfx_mix with beep.wav
 → doctor --qc final.mp4 + a burned-subtitle check. The work folder name has Thai characters and spaces on purpose.
 
-Exit 0 = pass (or SKIP when another task's engine files are not in this checkout yet), 1 = fail.
+Exit 0 = pass, 1 = fail. A checkout missing engine pieces is a SKIP, which also exits 1 (CI must never go green
+without running) unless --allow-skip is given for a local partial run.
 Uses whatever TAD_CLIP_HOME points at (CI: a fresh `setup.py --yes --model base`).
 """
 from __future__ import annotations
@@ -145,6 +146,26 @@ def vision_runs(py: Path, src: Path, work: Path) -> bool:
     raise SmokeFail(f"Apple Vision cut-out probe failed: {log.strip()[-400:]}")
 
 
+def parse_report(text: str) -> dict:
+    """doctor --json output → dict; anything unparseable → {} (which qc_problems rejects)."""
+    try:
+        data = json.loads(text or "")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def qc_problems(report: dict) -> list:
+    """A QC report passes only when it actually checked something, nothing failed, and doctor said ok."""
+    checks = report.get("checks") or []
+    problems = [f"QC {c.get('id')}: {c.get('detail', '')}" for c in checks if c.get("status") == "fail"]
+    if not checks:
+        problems.append("QC report has no checks (doctor --qc printed nothing usable)")
+    if report.get("ok") is not True:
+        problems.append(f"QC report is not ok (ok={report.get('ok')!r})")
+    return problems
+
+
 def missing_pieces() -> list:
     return [f"{p} ({task})" for p, task in NEEDS.items() if not (ROOT / p).exists()]
 
@@ -159,13 +180,14 @@ def main(argv=None) -> int:
     ap.add_argument("--work", help="folder to work in (default: a new temp folder)")
     ap.add_argument("--artifacts", help="copy final.mp4 + frames + storyboard here")
     ap.add_argument("--keep", action="store_true", help="keep the work folder")
+    ap.add_argument("--allow-skip", action="store_true", help="local partial checkouts: a SKIP exits 0 (never in CI)")
     a = ap.parse_args(argv)
 
     gone = missing_pieces()
     if gone:
         say("SKIP smoke: this checkout does not have every engine piece yet — " + " · ".join(gone))
         say("(the smoke runs in full once all tasks are merged)")
-        return 0
+        return 0 if a.allow_skip else 1
 
     mac = kit.IS_MAC
     py = kit.venv_python()
@@ -242,13 +264,11 @@ def main(argv=None) -> int:
         run([py, "-m", "engine.sfx_mix", comp_subs, clipdir / "sfx.json", final])
 
         step("5. QC")
-        report = json.loads(run([py, ROOT / "engine" / "doctor.py", "--qc", final, "--expect-duration", f"{end:.3f}", "--json"],
-                                capture=True, check=False) or "{}")
-        problems = []
+        report = parse_report(run([py, ROOT / "engine" / "doctor.py", "--qc", final, "--expect-duration", f"{end:.3f}",
+                                   "--json"], capture=True, check=False))
         for c in report.get("checks", []):
-            say(f"  {c['status']:4}  {c['name']}: {c['detail']}")
-            if c["status"] == "fail":
-                problems.append(f"QC {c['id']}: {c['detail']}")
+            say(f"  {c.get('status', '?'):4}  {c.get('name', '?')}: {c.get('detail', '')}")
+        problems = qc_problems(report)
         cue = first_cue_mid(srt[0], 0.5)
         pct = text_pixels(comp, comp_subs, cue)
         say(f"  subtitle pixels changed at {cue:.2f} s: {pct:.2f}% of the lower half")

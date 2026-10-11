@@ -1,6 +1,7 @@
 """Installer logic: macOS (Homebrew) and Windows (direct downloads), tested with fakes so both run on any OS."""
 import io
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -155,16 +156,18 @@ def test_ensure_node_downloads_22_zip(monkeypatch):
     calls = []
     monkeypatch.setattr(windows, "_fetch_json", lambda url: NODE_INDEX)
     monkeypatch.setattr(windows, "download", lambda url, dest, label="": calls.append(url) or _zip(Path(dest), ["node-v22.23.3-win-x64/node.exe", "node-v22.23.3-win-x64/npm"]))
+    monkeypatch.setattr(inst, "node_major", lambda p: 22)
     node = windows.ensure_node()
     assert calls == ["https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip"]
     assert Path(node) == kit.home() / "bin" / "node.exe"
 
 
-def test_ensure_ytdlp_and_uv_skip_when_present(monkeypatch):
+def test_ensure_ytdlp_and_uv_skip_when_present_and_running(monkeypatch):
     b = kit.home() / "bin"
     b.mkdir(parents=True)
     (b / "yt-dlp.exe").write_text("x")
     (b / "uv.exe").write_text("x")
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: (0, "1.0"))
     monkeypatch.setattr(windows, "download", lambda *a, **k: pytest.fail("must not download"))
     assert windows.ensure_ytdlp() == str(b / "yt-dlp.exe")
     assert windows.ensure_uv() == str(b / "uv.exe")
@@ -178,8 +181,8 @@ def test_download_retries_then_gives_thai_error(monkeypatch, tmp_path):
         tries.append(1)
         raise urllib.error.URLError("no network")
 
-    monkeypatch.setattr(windows.urllib.request, "urlopen", boom)
-    monkeypatch.setattr(windows.time, "sleep", lambda s: None)
+    monkeypatch.setattr(inst.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(inst.time, "sleep", lambda s: None)
     with pytest.raises(kit.KitError, match="โหลด"):
         windows.download("https://example.invalid/x.zip", tmp_path / "x.zip", "ทดสอบ")
     assert len(tries) == 3
@@ -196,7 +199,7 @@ def test_download_writes_file(monkeypatch, tmp_path):
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(windows.urllib.request, "urlopen", lambda *a, **k: Resp(b"abcdef"))
+    monkeypatch.setattr(inst.urllib.request, "urlopen", lambda *a, **k: Resp(b"abcdef"))
     out = windows.download("https://example.invalid/f.bin", tmp_path / "ไฟล์ ใหม่.bin", "f")
     assert out.read_bytes() == b"abcdef"
 
@@ -470,9 +473,9 @@ def test_resumable_download_restarts_when_server_ignores_range(monkeypatch, tmp_
 def test_resumable_download_rejects_wrong_size(monkeypatch, tmp_path):
     monkeypatch.setattr(inst.urllib.request, "urlopen", FakeHTTP(b"short"))
     monkeypatch.setattr(inst.time, "sleep", lambda s: None)
-    with pytest.raises(kit.KitError, match="ขนาดไม่ตรง"):
+    with pytest.raises(kit.KitError, match="ไม่สำเร็จ"):
         inst.download_resumable("https://x/f.bin", tmp_path / "f.bin", "f", expected=999)
-    assert not (tmp_path / "f.bin").exists()
+    assert not (tmp_path / "f.bin").exists()   # a short file is never renamed into place
 
 
 def test_setup_downloads_ggml_for_whispercpp(monkeypatch):
@@ -486,7 +489,7 @@ def test_setup_downloads_ggml_for_whispercpp(monkeypatch):
     monkeypatch.setattr(inst, "download_resumable", fake)
     monkeypatch.setattr(setup, "_call", lambda *a, **k: pytest.fail("must not fetch the faster-whisper model on the whisper.cpp path"))
     setup.download_model(Path("py"), "large-v3")
-    assert got == [("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin", "ggml-large-v3.bin", 3095033483)]
+    assert got == [(f"https://huggingface.co/ggerganov/whisper.cpp/resolve/{inst.GGML_REV}/ggml-large-v3.bin", "ggml-large-v3.bin", 3095033483)]
 
 
 def test_setup_skips_complete_ggml(monkeypatch):
@@ -512,3 +515,268 @@ def test_mac_plan_lists_whispercpp_and_ggml_size(monkeypatch):
     lines, mb = setup.plan("mac", "large-v3", with_cutout=False, gpu=None, have={})
     text = "\n".join(lines)
     assert "whisper.cpp" in text and "ggml-large-v3" in text and "3.1 GB" in text
+
+
+# ================================================================ fix round 1
+import http.server  # noqa: E402
+import threading  # noqa: E402
+import urllib.error  # noqa: E402
+
+
+class _Server:
+    """Local HTTP server serving `data`. `cut` = bytes after which each of the first `cut_times` responses closes
+    cleanly (no error, just EOF). Honours Range unless ignore_range. Records every Range header it sees."""
+
+    def __init__(self, data: bytes, cut: int = None, cut_times: int = 1, ignore_range=False):
+        self.data, self.cut, self.cut_times, self.ignore_range, self.ranges = data, cut, cut_times, ignore_range, []
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                outer.ranges.append(rng)
+                start = int(rng.split("=")[1].rstrip("-")) if rng and not outer.ignore_range else 0
+                if rng and not outer.ignore_range and start >= len(outer.data):
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{len(outer.data)}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                body = outer.data[start:]
+                self.send_response(206 if rng and not outer.ignore_range else 200)
+                if rng and not outer.ignore_range:
+                    self.send_header("Content-Range", f"bytes {start}-{len(outer.data) - 1}/{len(outer.data)}")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                if outer.cut is not None and outer.cut_times > 0:
+                    outer.cut_times -= 1
+                    self.wfile.write(body[:outer.cut])
+                    self.wfile.flush()
+                    self.close_connection = True
+                    return
+                self.wfile.write(body)
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/ggml-test.bin"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(inst.time, "sleep", lambda s: None)
+
+
+FIVE_MB = bytes(range(256)) * (5 * 4096)
+
+
+def test_resume_after_a_clean_early_close_keeps_the_part(tmp_path, no_sleep):
+    srv = _Server(FIVE_MB, cut=2 * 1024 * 1024)
+    try:
+        out = inst.download_resumable(srv.url, tmp_path / "โมเดล ใหม่.bin", "test", expected=len(FIVE_MB))
+    finally:
+        srv.close()
+    assert out.read_bytes() == FIVE_MB
+    assert srv.ranges == [None, f"bytes={2 * 1024 * 1024}-"]   # the 2 MB already on disk were kept
+
+
+def test_resume_without_expected_size_uses_content_length(tmp_path, no_sleep):
+    srv = _Server(FIVE_MB, cut=1_000_000, cut_times=2)
+    try:
+        out = inst.download_resumable(srv.url, tmp_path / "f.bin", "test")
+    finally:
+        srv.close()
+    assert out.read_bytes() == FIVE_MB and srv.ranges[0] is None and srv.ranges[1] == "bytes=1000000-"
+
+
+def test_oversized_part_and_416_restarts_from_zero(tmp_path, no_sleep):
+    dest = tmp_path / "f.bin"
+    (tmp_path / "f.bin.part").write_bytes(FIVE_MB + b"garbage")
+    srv = _Server(FIVE_MB)
+    try:
+        out = inst.download_resumable(srv.url, dest, "test", expected=len(FIVE_MB))
+    finally:
+        srv.close()
+    assert out.read_bytes() == FIVE_MB
+    assert srv.ranges[-1] is None   # the last, successful request started from scratch
+
+
+def test_complete_part_and_416_is_accepted(tmp_path, no_sleep):
+    (tmp_path / "f.bin.part").write_bytes(FIVE_MB)
+    srv = _Server(FIVE_MB)
+    try:
+        out = inst.download_resumable(srv.url, tmp_path / "f.bin", "test", expected=len(FIVE_MB))
+    finally:
+        srv.close()
+    assert out.read_bytes() == FIVE_MB
+
+
+def test_server_that_always_cuts_and_ignores_range_ends_in_a_thai_error(tmp_path, no_sleep):
+    srv = _Server(FIVE_MB, cut=1_000_000, cut_times=99, ignore_range=True)
+    try:
+        with pytest.raises(kit.KitError, match="ไม่สำเร็จ|ไม่ครบ"):
+            inst.download_resumable(srv.url, tmp_path / "f.bin", "test", tries=3)
+    finally:
+        srv.close()
+    assert not (tmp_path / "f.bin").exists()
+
+
+def test_windows_download_verifies_length_and_starts_fresh(tmp_path, no_sleep):
+    """A stale .part from an older 'latest' file must not be glued onto a new download."""
+    dest = tmp_path / "yt-dlp.exe"
+    (tmp_path / "yt-dlp.exe.part").write_bytes(b"old build bytes")
+    srv = _Server(FIVE_MB, cut=3_000_000)
+    try:
+        out = windows.download(srv.url, dest, "yt-dlp")
+    finally:
+        srv.close()
+    assert out.read_bytes() == FIVE_MB and srv.ranges[0] is None
+
+
+def test_offline_download_is_a_thai_error_with_fix_line(tmp_path, no_sleep):
+    with pytest.raises(kit.KitError) as e:
+        windows.download("http://127.0.0.1:9/nothing.zip", tmp_path / "x.zip", "ffmpeg")
+    assert "อินเทอร์เน็ต" in str(e.value) and "setup.py" in str(e.value)
+
+
+def test_bad_zip_is_a_thai_error_with_fix_line(tmp_path):
+    z = tmp_path / "ffmpeg.zip"
+    z.write_bytes(b"<html>rate limited</html>")
+    with pytest.raises(kit.KitError) as e:
+        windows.extract(z, {"ffmpeg.exe": tmp_path / "ffmpeg.exe"})
+    assert "zip" in str(e.value) and "setup.py" in str(e.value)
+
+
+def test_bad_zip_moves_on_to_the_next_ffmpeg_build(monkeypatch):
+    calls = []
+    monkeypatch.setattr(windows, "ffmpeg_urls", lambda: ["https://x/a.zip", "https://x/b.zip"])
+    monkeypatch.setattr(inst, "has_libass", lambda ff: True)
+
+    def fake_download(url, dest, label=""):
+        calls.append(url)
+        if url.endswith("a.zip"):
+            Path(dest).write_bytes(b"not a zip")
+            return Path(dest)
+        return _zip(Path(dest), ["bin/ffmpeg.exe", "bin/ffprobe.exe"])
+
+    monkeypatch.setattr(windows, "download", fake_download)
+    windows.ensure_ffmpeg()
+    assert calls == ["https://x/a.zip", "https://x/b.zip"]
+
+
+def test_offline_node_index_is_a_thai_error(monkeypatch):
+    def offline(url):
+        raise urllib.error.URLError("getaddrinfo failed")
+    monkeypatch.setattr(windows, "_fetch_json", offline)
+    with pytest.raises(kit.KitError) as e:
+        windows.ensure_node()
+    assert "nodejs.org" in str(e.value) and "อินเทอร์เน็ต" in str(e.value) and "setup.py" in str(e.value)
+
+
+def test_uv_and_ytdlp_that_do_not_run_are_downloaded_again(monkeypatch):
+    b = kit.home() / "bin"
+    b.mkdir(parents=True)
+    (b / "uv.exe").write_text("quarantined")
+    (b / "yt-dlp.exe").write_text("quarantined")
+    got = []
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: (1, "cannot run") if Path(cmd[0]).read_text() == "quarantined" else (0, "ok 1.0"))
+
+    def fake_download(url, dest, label=""):
+        got.append(url)
+        if str(dest).endswith(".zip"):
+            return _zip(Path(dest), ["uv.exe"])
+        Path(dest).write_text("new")
+        return Path(dest)
+
+    monkeypatch.setattr(windows, "download", fake_download)
+    windows.ensure_uv()
+    assert got == [windows.UV_URL]
+    windows.ensure_ytdlp()
+    assert got == [windows.UV_URL, windows.YTDLP_URL]
+
+
+def test_ytdlp_that_still_does_not_run_after_download_warns_but_does_not_stop(monkeypatch, capsys):
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: (1, "blocked"))
+    monkeypatch.setattr(windows, "download", lambda url, dest, label="": Path(dest).write_text("x") or Path(dest))
+    windows.ensure_ytdlp()
+    assert "กันไวรัส" in capsys.readouterr().out
+
+
+def test_corrupt_config_is_backed_up_and_setup_starts_from_defaults(capsys, monkeypatch):
+    monkeypatch.setattr(inst, "ram_bytes", lambda: 16 * 1024 ** 3)
+    kit.home().mkdir(parents=True, exist_ok=True)
+    bad = '{"speaker": {"name": "สมชาย"}, "tools": {'
+    (kit.home() / "config.json").write_text(bad, encoding="utf-8")
+    assert setup.choose_model(None) == "large-v3"
+    backups = list(kit.home().glob("config.json.broken-*"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == bad
+    assert not (kit.home() / "config.json").exists()
+    out = capsys.readouterr().out
+    assert backups[0].name in out and "ค่าเริ่มต้น" in out
+    setup.update_config({"ffmpeg": "/x"}, "base")
+    assert json.loads((kit.home() / "config.json").read_text(encoding="utf-8"))["tools"] == {"ffmpeg": "/x"}
+
+
+def test_setup_main_with_corrupt_config_has_no_traceback(monkeypatch, capsys):
+    kit.home().mkdir(parents=True, exist_ok=True)
+    (kit.home() / "config.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(inst, "os_name", lambda: "windows")
+    monkeypatch.setattr(inst, "nvidia_gpu", lambda: None)
+    monkeypatch.setattr(windows, "have", lambda: {})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    assert setup.main(["--model", "base"]) == 2
+    assert list(kit.home().glob("config.json.broken-*"))
+
+
+def test_model_choices_are_the_supported_set(capsys):
+    with pytest.raises(SystemExit):
+        setup.main(["--model", "large-v3-turbo"])
+    assert "large-v3" in capsys.readouterr().err
+    assert setup.MODELS == ("large-v3", "medium", "small", "base", "tiny")
+
+
+def test_unsupported_model_in_config_falls_back_to_default(monkeypatch, capsys):
+    monkeypatch.setattr(inst, "ram_bytes", lambda: 16 * 1024 ** 3)
+    kit.save_config({"whisper": {"model": "large-v3-turbo"}})
+    assert setup.choose_model(None) == "large-v3"
+    assert "large-v3-turbo" in capsys.readouterr().out
+
+
+def test_no_turbo_anywhere_in_the_install_tables():
+    for table in (inst.WHISPER_REPOS, inst.WHISPER_MB, inst.GGML_BYTES):
+        assert not any("turbo" in k for k in table)
+
+
+def test_uv_torch_hf_and_cutout_weights_live_under_the_kit_home(monkeypatch):
+    monkeypatch.setenv("UV_CACHE_DIR", "/somewhere/else")
+    env = setup._env()
+    home = str(kit.home())
+    for k in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_BIN_DIR", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR",
+              "TORCH_HOME", "HF_HOME", "TRANSPARENT_BACKGROUND_FILE_PATH"):
+        assert env[k].startswith(home), (k, env[k])
+    assert env["UV_PYTHON_INSTALL_REGISTRY"] == "0"
+
+
+def test_ggml_url_is_pinned_to_a_revision():
+    assert re.fullmatch(r"[0-9a-f]{40}", inst.GGML_REV)
+    assert f"/resolve/{inst.GGML_REV}/ggml-" in inst.GGML_URL and "/main/" not in inst.GGML_URL
+
+
+def test_requirements_are_pinned_and_pytest_is_dev_only():
+    req = (ROOT / "engine" / "install" / "requirements.txt").read_text(encoding="utf-8")
+    pkgs = [l.strip() for l in req.splitlines() if l.strip() and not l.startswith("#")]
+    assert pkgs and all("<" in p and ">=" in p for p in pkgs), pkgs
+    assert not any(p.lower().startswith("pytest") for p in pkgs)
+    dev = (ROOT / "engine" / "install" / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "pytest" in dev and "-r requirements.txt" in dev
+    cut = (ROOT / "engine" / "install" / "requirements-cutout.txt").read_text(encoding="utf-8")
+    assert "transparent-background>=1.3,<2" in cut

@@ -17,6 +17,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 - `env.sh` ตั้ง `KIT` (และ `cd` เข้าไปให้) · `TC_HOME` · `PY` (python ของ kit) · `FF` (ffmpeg ที่มี libass) · `NODE` → เรียก `"$NODE" engine/visual/thv.mjs …` · `"$PY" -m engine.…` · `"$FF" …` เสมอ **ห้ามเรียก `node`/`ffmpeg` เปล่าๆ**
 - เพราะ `cd` เข้าโฟลเดอร์ kit แล้ว **ไฟล์ของผู้ใช้ต้องเป็น path เต็มเสมอ** (`"$W/plan.json"`) · ชื่อไทย/มีช่องว่างใช้ได้ ใส่ `"..."` ทุกครั้ง
 - `env.sh` บอกว่ายังไม่ได้ติดตั้ง → ส่งต่อ skill **tad-clip-setup** ก่อน
+- **คำสั่งที่นานเกิน ~60 วิได้** (`thv all` · `motion` · `compose` · `subs` · `loose` · `animatic` · `engine.cutout`) → เรียก Bash ด้วย **`run_in_background: true`** (ต่อหลายคำสั่งด้วย `&&` ในก้อนเดียวได้) แล้วรอจนระบบแจ้งว่าจบ อ่าน output ดูบรรทัดสุดท้าย: `→ <โฟลเดอร์>` = สำเร็จ · `❌ …` = ล้มเหลว · ถ้ารันแบบรอผล ต้องตั้ง timeout ของ Bash 600000 — ค่าเริ่ม 2 นาทีไม่พอ (compose คลิป 70 วิครั้งแรก ~4 นาที)
 - ทุก path **ใน** `plan.json` (คลิป · ซับ · ภาพ · ฟุตเทจ) เทียบกับโฟลเดอร์ของ plan (เขียนแบบ relative ได้)
 - ไวยากรณ์ภาพ (layout · การ์ด · จังหวะ · เลือกภาพตามชนิดข้อมูล) → **Read `${CLAUDE_PLUGIN_ROOT}/engine/visual/references/visual-modes.md` ทุกครั้ง** (ถ้า `${CLAUDE_PLUGIN_ROOT}` ไม่ถูกแทนค่า ให้ใช้ `~/.tad-clip/kit`)
 - look `vox` (explainer แบบ Vox: คำถามเดียว · เอกสาร/กราฟ/timeline วาดตัวเอง · การ์ดอก · ที่มาบนจอบังคับ) → Read `${CLAUDE_PLUGIN_ROOT}/engine/visual/references/vox-style.md` เพิ่ม · ใช้เมื่อผู้ใช้ขอ Vox/explainer หรือหัวข้อเป็น "ทำไม/ยังไง X ถึงเกิด" ที่มีหลักฐานจริงให้โชว์
@@ -61,16 +62,18 @@ mkdir -p "$W/out" && "$FF" -v error -y -i "$W/roughcut.mp4" -vf "fps=1/2,scale=1
 แตกบทเป็นช็อตตาม `visual-modes.md` §4 · โครงไฟล์ดูจากตัวอย่าง
 - `t: [เริ่ม, จบ]` จากเวลาจริงใน `subs/cues.json` · ช็อตต้องต่อกันพอดี (จบช็อตก่อน = เริ่มช็อตถัดไป) · `say` = ประโยคที่พูดช่วงนั้น
 - **ลำดับวัตถุดิบ: ของจริงเป็นกระดูก → การ์ดเป็นจังหวะ → มีมเป็นเครื่องปรุง**
-  - ของจริง: `visual.proof` (บอกว่าคืออะไร) + `proof_file` (ชื่อไฟล์ใน `assets/proof/` ไม่ต้องใส่นามสกุล หรือ path เต็มเทียบ plan) · คลิปจริง: `visual.footage` `{ file, start, label, speed?, source }`
+  - ของจริง: `visual.proof` (บอกว่าคืออะไร) + `proof_file` (ชื่อไฟล์ใน `assets/proof/` ไม่ต้องใส่นามสกุล หรือ path เต็มเทียบ plan) · คลิปจริง: `visual.footage` `{ file, start, label, speed?, source, source_y? }` — **`footage.source` ถูกวาดบนจอเป็นป้ายที่มาแบบเดียวกับ overlay `source`** (มุมซ้ายบน y 14% · ย้ายด้วย `source_y`) · ถ้าใส่ overlay `source` เองในช็อตนั้นแล้ว ป้ายจาก footage จะไม่ซ้ำ
   - การ์ด: รีเซ็ตสายตาทุก 12–18 วิ · ผังกลไก · ตัวเลข · CTA
   - มีม: ~3 ตัวต่อ 60 วิ ตรงประโยคตบมุกเท่านั้น (ดูสูตรข้างล่าง)
   - ภาพ AI: **ไม่บังคับ** ใช้เฉพาะฉากที่ไม่มีของจริงเลย → `visual.ai: "<id>"` + `prompts.<id>.scene` ภาษาอังกฤษ บรรยายฉากอย่างเดียว · `"$NODE" engine/visual/thv.mjs prompts "$W/plan.json"` ทำบล็อกให้ผู้ใช้ไปวางในเครื่องมือทำภาพที่ใช้อยู่ (ตัวฟรีก็ได้) แล้วบันทึกเป็น `assets/ai/<id>.png` · ห้ามให้ AI เขียนตัวหนังสือไทยในภาพ · 1 คลิป 1 `plan.style` (`diorama` · `photo` · `collage`) · ฉากสะสมใช้ `edit_of` · ตัวละครเดิมข้ามช็อตใช้ `same_as: [{id, who}]` · `plan.people` = คนในภาพเป็นใคร (เช่น `"Thai office workers"`)
-- **ตัวเลข/คำพูด/เอกสารบนจอต้องเป็นของจริงและมีที่มา** (`source` ในการ์ด · overlay `source` บนภาพ/คลิป) · ไม่มีที่มา = ไม่ใส่ตัวเลข · ห้ามแต่งตัวเลข · ภาพ/ฉากจำลองติดป้าย `ภาพจำลอง: …` ทุกช็อต
+- **ตัวเลข/คำพูด/เอกสารบนจอต้องเป็นของจริงและมีที่มา** (`source` ในการ์ด · overlay `source` บนภาพ/คลิป) · ไม่มีที่มา = ไม่ใส่ตัวเลข · ห้ามแต่งตัวเลข
+- **ภาพจำลองต้องบอกว่าจำลอง ทุกช็อต:** ภาพ AI **และภาพ/คลิปสต็อก (Pexels · Pixabay · Commons ฯลฯ) ที่ยืนแทนเหตุการณ์จริง** (เช่น คนโวยวายทางโทรศัพท์ · ร้านที่ปิด) → ป้ายที่มาขึ้นต้น `ภาพจำลอง · <ที่มา>` (ใส่ใน `footage.source` หรือ overlay `source`) · เฉพาะของจริงของเหตุการณ์นั้นที่ไม่ต้องมีคำว่าภาพจำลอง
 - ฟองแชต (ประโยคที่คนดูจะก๊อปไปใช้) → `split` + `visual.panel: "primary"` + overlay `chat` · **ห้ามวางฟองแชตบน `full-speaker`** (ทับหน้า) · ข้อความยาว 4–5 บรรทัด → ตัด label ในครึ่งบนทิ้ง
 - หัวข้อที่ไม่มีของจริงให้โชว์ (ความสัมพันธ์/มุมคิด) → `"proof_exempt": "เหตุผล"`
 - ถ้อยคำบนการ์ดสั้นพอไม่ให้ตัดบรรทัดกลางคำ (ย่อ `lines` ไม่ใช่ลดฟอนต์) · ดูใน storyboard ทุกครั้ง
 - สีใช้ชื่อ token: `primary` · `paper` · `accent` · `accent2` (ค่าจริงมาจากแบรนด์ใน config) · ฟอนต์ = `config.brand.font` (ค่าเริ่ม Prompt ที่แนบมา)
-- `plan.preset`: `1080p` (1080×1920 · fps ตามคลิปไม่เกิน 60) หรือ `2k60` (1440×2560 @ 60) · ไม่ใส่ = ตาม `config.output.preset` · ทุกพิกัดใน plan คิดเป็น 1080×1920 เสมอ ไม่ว่า preset ไหน
+- `plan.preset`: `1080p` = 1080×1920 · fps ตามคลิป **แต่ไม่เกิน 30** (คลิปมือถือ 60 fps ถูกลดเป็น 30: เรนเดอร์เร็วขึ้นเท่าตัว ไฟล์เล็กลง ดูในมือถือไม่ต่าง · อยากได้ 60 ใส่ `"fps": 60`) · `2k60` = 1440×2560 @ 60 · ไม่ใส่ = ตาม `config.output.preset` · ทุกพิกัดใน plan คิดเป็น 1080×1920 เสมอ ไม่ว่า preset ไหน
+- ตำแหน่งทุกชิ้นเป็น **% ของเฟรม 1080×1920** · `highlight` · `annotate` · `label` · `keyword` · `docchip` · `image`: `x`,`y` = **จุดกึ่งกลางของกล่อง** (`w`,`h` = ความกว้าง/สูงเป็น %) · `name` · `source` · `chat` (ที่ใส่ `y`): `y` = ขอบบน · `highlight` ให้ `h` เท่าความสูงบรรทัดตัวหนังสือในภาพ (วัดจากภาพ proof จริง ไม่ใช่เดา) — ตารางฟิลด์ทั้งหมดอยู่ท้ายไฟล์
 - look vox: ใส่ `beat` ทุกช็อต (cold-open · question · context · mechanism · turn · proof · so-what) + checklist `vox-style.md` §6
 
 ## Step 3 — เช็ค + storyboard → ให้ผู้ใช้ผ่านก่อนเรนเดอร์
@@ -79,21 +82,25 @@ mkdir -p "$W/out" && "$FF" -v error -y -i "$W/roughcut.mp4" -vf "fps=1/2,scale=1
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
 "$NODE" engine/visual/thv.mjs check "$W/plan.json"
-"$NODE" engine/visual/thv.mjs all   "$W/plan.json"     # storyboard.png · shots/*.png · edit-sheet.md · prompts.md (ไม่กี่วินาที)
+# งานนาน → เรียก Bash ด้วย run_in_background: true แล้วรอบรรทัดสุดท้าย "→ <โฟลเดอร์>" (หรือ ❌) ห้ามรันแบบรอ (timeout 2 นาที)
+"$NODE" engine/visual/thv.mjs all   "$W/plan.json"     # storyboard.png · shots/*.png · edit-sheet.md · prompts.md
 ```
 - `check` มี ❌ = ห้ามไปต่อ · ⚠️ = แก้ หรือบอกผู้ใช้ว่าทำไมยอมให้ผ่าน
-- ตัวตรวจจับ: ไฟล์ `proof_file`/`footage`/รูป overlay ไม่เจอ (ช็อตจะออกจอดำ) · ช็อตค้างเกิน 3 วิในช่วงเปิด (vox 4) · ไม่มีการ์ดรีเซ็ตเกิน 18 วิ · ข้อความซ้อน >2 ชั้น · ผู้พูดเต็มจอเปล่าเกิน 6 วิ · ข้อความในโซนปุ่มของแอป (y <12% หรือ >72%) · การ์ดอกทับหน้า · chart/stat/doc/quote ไม่มี source (vox = error) · source ยังเป็น "ตัวอย่าง" · ภาพ AI หลายสไตล์ · ไทยใน prompt · `cutout` บนเครื่องที่ไม่มีตัวตัดพื้น (error → เปลี่ยนเป็น `split`)
-- **Read `out/storyboard.png` เองก่อน** (ไทยตัดกลางคำ · การ์ดล้น · ภาพผิดช็อต) แล้วส่ง path ให้ผู้ใช้ดู พร้อมสรุปสั้นว่าแต่ละช่วงโชว์อะไร · **รอผู้ใช้ผ่านก่อนเรนเดอร์** — แก้แผนตอนนี้ถูกที่สุด
+- ตัวตรวจจับ: ไฟล์ `proof_file`/`footage`/รูป overlay ไม่เจอ (ช็อตจะออกจอดำ) · ช็อตค้างเกิน 3 วิในช่วงเปิด (vox 4) · ไม่มีการ์ดรีเซ็ตเกิน 18 วิ · ข้อความซ้อน >2 ชั้น · ผู้พูดเต็มจอเปล่าเกิน 6 วิ · ข้อความในโซนปุ่มของแอป (y <12% หรือ >72%) · การ์ดอกทับหน้า · chart/stat/doc/quote ไม่มี source (vox = error) · source ยังเป็น "ตัวอย่าง" · ภาพ AI หลายสไตล์ · ไทยใน prompt · `cutout` บนเครื่องที่ไม่มีตัวตัดพื้น (error → เปลี่ยนเป็น `split`) · **overlay ทับกันเอง หรือทับแถบซับ** (warning — ประมาณจากชนิด/ตำแหน่ง/ความยาวข้อความ ต้องดูภาพยืนยัน)
+- storyboard ใช้**เฟรมจริงของผู้พูด**ตรงกลางแต่ละช็อต (วางตามที่ compose จะวาง: ครึ่งล่างของ split ตาม `split_window` · หน้าบนการ์ดตาม `face_circle` · ตัว cutout ย่อชิดล่าง) และวาด**บรรทัดซับตรงตำแหน่งที่จะ burn จริง** — ต้องมี `source_video` (+ `subs`) ใน plan ก่อน ไม่งั้นเป็นภาพตัวแทนสีเทา · ช็อตที่ไม่มีกราฟิก (ผู้พูดเต็มจอเปล่า) ไม่มี PNG ใน `shots/` — log บอกว่าช็อตไหน
+- **Read `out/storyboard.png` เองก่อน** (ไทยตัดกลางคำ · การ์ดล้น · ภาพผิดช็อต · ซับทับหน้า/ทับป้าย) · thumbnail เล็ก → **Read `out/shots/<id>-*.png` เพิ่มทุกช็อตที่มี `highlight` / `annotate` / `chat` / ที่ check เตือนว่าทับกัน** (แถบไฮไลต์ต้องทับบรรทัดเดียวพอดี) · แล้วส่ง path ให้ผู้ใช้ดู พร้อมสรุปสั้นว่าแต่ละช่วงโชว์อะไร · **รอผู้ใช้ผ่านก่อนเรนเดอร์** — แก้แผนตอนนี้ถูกที่สุด
 
 ## Step 4 — เรนเดอร์ในเครื่อง
 
 ```bash
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
+# งานนาน → เรียก Bash ด้วย run_in_background: true แล้วรอบรรทัดสุดท้าย "→ <โฟลเดอร์>" (หรือ ❌) ห้ามรันแบบรอ (timeout 2 นาที)
 "$NODE" engine/visual/thv.mjs motion  "$W/plan.json"   # การ์ด/ข้อความขยับ → out/shots/*.mp4 (พื้นเขียวตรงโซนผู้พูด)
 "$NODE" engine/visual/thv.mjs compose "$W/plan.json"   # ประกอบลงคลิปจริง + ตัดพื้นหลังคน → out/preview-composite.mp4
 "$NODE" engine/visual/thv.mjs subs    "$W/plan.json"   # burn ซับ karaoke → out/preview-composite-subs.mp4 + preview-composite-720p.mp4
 ```
+- เวลาโดยประมาณ (คลิป ~70 วิ · 17 ช็อต · Mac M-series · 1080p): `motion` ~2 นาที (~8 วิ/ช็อต) · **`compose` ประกอบใหม่ทั้งคลิปทุกครั้ง** (ไม่มี `--shot`): ครั้งแรก ~4 นาที (ตัดพื้นหลังคน) · ครั้งต่อไป ~1 นาที (ใช้แคชตัวตัดพื้น) · `subs` ~1 นาที · ที่ 2K60 นานขึ้น ~2–3 เท่า
 - `compose` ต้องมี `plan.source_video` + รัน `motion` ก่อน · ภาพออก 8-bit SDR yuv420p fps คงที่เสมอ (คลิป iPhone HDR/10-bit/VFR ถูกแปลงให้)
 - `subs` ต้องมี `plan.subs` (หรือ `--ass <ไฟล์>`) · **ช็อต split ซับย้ายไปใต้รอยต่อเอง** (`plan.split_sub_y` % · ค่าเริ่ม 59) เพราะแถบซับปกติทับหน้าครึ่งล่าง · บรรทัดไหนอยู่ช็อตไหนตัดสินจากกึ่งกลางบรรทัด · `sub_y` รายช็อต = ย้ายซับเฉพาะช็อตนั้น · การ์ดเต็มจอถูกดันขึ้นพ้นแถบซับอยู่แล้ว
 - **ตัดพื้นหลังคน** (`cutout` layout + `face_circle.mode: "cutout"`): `config.cutout.engine` — `auto` = **vision** บน Mac (Apple Vision เร็ว ~2 วิต่อคลิป 1 วิ ไม่ต้องลงอะไร) · **tb** = transparent-background (ช้า ~30 วิต่อคลิป 1 วิบน Mac · มีการ์ดจอ NVIDIA เร็วกว่ามาก · CPU ช้ามาก) ใช้เมื่อ vision ตัดพัง (ช่องระหว่างนิ้วโปร่ง ขอบแตก ไมค์/ของในมือหาย) หรืองานที่ต้องเนี้ยบ · `off` = เครื่องนี้ไม่มี → ใช้ `split` แทน · รายช็อตเลือกได้ด้วย `cutout_engine` · `plan.cutout.scale` (ค่าเริ่ม 0.62) · `"engine": "none"` = กลับไปใช้กรอบ PiP แบบเดิม
@@ -107,7 +114,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
   - tb ต้องติดตั้งเพิ่มก่อน (skill tad-clip-setup → `--with-cutout` ~2GB) · ใช้ครั้งแรกจะโหลดโมเดลจากเน็ตเอง
 - **2K60** (`preset: "2k60"`): Chrome วาดการ์ดที่ 2K จริง ยกเว้นการ์ดเต็มจอที่วาด 1080 แล้วขยายแบบ lanczos (`card_scale` 1 — เกรนกระดาษของ vox ที่ 2K หนักมาก) · ไม่ต้องรัน `all` ใหม่ด้วย 2K (storyboard/การ์ด PNG วาดที่ 1080 เสมอ) · ใช้เวลา motion ~1 นาที/ช็อต · ไฟล์ 50–100MB ต่อคลิป 1 นาที
 - เช็คที่ว่างก่อนเรนเดอร์ยาว (`df -h "$W"`) — เหลือ <3GB บอกผู้ใช้ก่อน · งานยาวรันเบื้องหลังแล้วรอด้วยการดูบรรทัดสุดท้ายของ log (`→ <โฟลเดอร์>`) ไม่ใช่ `pgrep` (จับ shell ที่รอเองด้วย)
-- เรนเดอร์ใหม่ทีละช็อต: `--shot 07` · Chrome/Edge ค้างระหว่างวาด → เปิดใหม่แล้วทำช็อตนั้นซ้ำเอง สูงสุด 3 ครั้ง (log `↻ shot xx`) · รอบ retry ที่ 2K ถอยไปวาดที่ 1080 แล้วขยาย
+- แก้ช็อตเดียวหลัง QC: `motion --shot 07` (ไม่กี่วินาที) แล้ว `compose` + `subs` ใหม่ทั้งคลิป (รวม ~2 นาทีเมื่อมีแคชตัวตัดพื้นแล้ว) · Chrome/Edge ค้างระหว่างวาด → เปิดใหม่แล้วทำช็อตนั้นซ้ำเอง สูงสุด 3 ครั้ง (log `↻ shot xx`) · รอบ retry ที่ 2K ถอยไปวาดที่ 1080 แล้วขยาย
 - **ไฟล์สุดท้ายผ่าน `sfx_mix` เสมอ** (ไม่มีเสียง FX ก็ใส่ `[]` ใน `sfx.json`) — ตัวนี้คุมระดับเสียง FX ต่ำกว่าเสียงพูด −8 dB และมี limiter กันพีค · thv ไม่มี limiter ของตัวเอง · หาเสียงจากคลังผ่าน skill tad-clip-library
   ```bash
   K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
@@ -136,6 +143,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 ```bash
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
+# งานนาน → เรียก Bash ด้วย run_in_background: true แล้วรอบรรทัดสุดท้าย "→ <โฟลเดอร์>" (หรือ ❌) ห้ามรันแบบรอ (timeout 2 นาที)
 "$NODE" engine/visual/thv.mjs loose "$W/plan.json"            # --shot 07 = ช็อตเดียว
 ```
 → `out/loose/<id>-<ชนิด>.mp4` กราฟิกล้วนบนพื้นเขียว `#00FF00` ทั้งเฟรม (CapCut: Chroma key · Intensity ~10 · Shadow 0) + `.png` เฟรมสุดท้ายพื้นใสจริง + `place-sheet.md` (เวลาเริ่ม/ยาว/ข้างใต้ควรเป็นอะไร) · ไม่มีภาพ/พื้นการ์ด/เงาฟุ้ง (เงาโปร่งบนเขียว = ขอบติดเขียวหลัง key) · ตัวหนังสือขาวได้ขอบเข้มให้อ่านบนวิดีโอได้ · ส่งคู่กับ `out/edit-sheet.md` (ทุกช็อตบอกแทร็ก/ไฟล์/วิธี key · look vox มีคอลัมน์ SFX) · `motion --matte alpha` = `.mov` ProRes 4444 พื้นใสแทนพื้นเขียว
@@ -144,13 +152,14 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 1. ทำซับ/เวลาคำของคลิปนั้น (tad-clip-subs)
 2. ดู edit เดิมก่อนวางอะไร: contact sheet ทุก 2 วิ + เวลาคัต (`select=gt(scene,0.3)`) → หาช่วงที่พูดเปล่าๆ และจุดว่างที่ไม่ทับหน้า/มีม/ข้อความเดิม
 3. `plan-overlay.json`: `"mode": "overlay-on-cut"` · `"out": "out-overlay"` · ทุกช็อต `full-speaker` · ช่วงที่ไม่แตะ = ช็อตเปล่า · ตัวตรวจข้ามกฎจังหวะ (จังหวะเป็นของ edit เดิม) เหลือเช็คโซนปุ่ม/ข้อความซ้อน
-4. `"$NODE" engine/visual/thv.mjs motion "$W/plan-overlay.json"` → `… compose "$W/plan-overlay.json"` = คลิปเดิม + ชั้นข้อมูล + เสียงเดิม (เฟรมนับจากเวลาเด็ดขาด ไม่เลื่อน)
+4. `"$NODE" engine/visual/thv.mjs motion "$W/plan-overlay.json"` → `… compose "$W/plan-overlay.json"` (ทั้งสองคำสั่งใช้ Bash `run_in_background: true` แล้วรอบรรทัด `→ <โฟลเดอร์>`) = คลิปเดิม + ชั้นข้อมูล + เสียงเดิม (เฟรมนับจากเวลาเด็ดขาด ไม่เลื่อน)
 - ถ้าคลิปมีซับเต็มอยู่แล้ว → pill ที่พูดซ้ำเสียงจะซ้ำซ้อน · เก็บแค่ฟองแชต (ประโยคที่ก๊อปได้) + CTA
 
 **ดูจังหวะก่อนถ่าย/ก่อนมีภาพ (animatic)** —
 ```bash
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
+# งานนาน → เรียก Bash ด้วย run_in_background: true แล้วรอบรรทัดสุดท้าย "→ <โฟลเดอร์>" (หรือ ❌) ห้ามรันแบบรอ (timeout 2 นาที)
 "$NODE" engine/visual/thv.mjs animatic "$W/plan.json"
 ```
 → `out/animatic.mp4` 540×960 ทั้งไทม์ไลน์ มีภาพตัวแทนตรงโซนผู้พูด/ภาพที่ยังไม่มี
@@ -208,6 +217,18 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 | `mirror` | ช่วงที่ภาพกลับซ้ายขวา `[[from, to]]` |
 | `mode: "overlay-on-cut"` · `proof_exempt` · `people` | ทับ edit เดิม · เหตุผลที่ไม่มีของจริง · คนในภาพ AI เป็นใคร |
 | shot `beat` | look vox: cold-open · question · context · mechanism · turn · proof · so-what |
+
+**ใช้ได้ทุก look (ไม่ใช่แค่ vox)** — ตำแหน่งเป็น % ของเฟรม 1080×1920 · รายละเอียดเต็มใน `visual-modes.md` §2
+
+| ฟิลด์ | ใส่อะไร | หมายเหตุ |
+|---|---|---|
+| overlay `source` | `text` · `y` (ขอบบนของป้าย · ค่าเริ่ม 14) | ป้ายที่มาเล็กมุมซ้าย ("ที่มา · …") · ภาพจริง/คลิปจริง/มีมทุกชิ้น · ภาพจำลอง/สต็อกขึ้นต้น `ภาพจำลอง ·` · 14% อยู่ใกล้โซนปุ่มบนของแอป ถ้าทับตัวหนังสือในภาพให้เลื่อนลง |
+| visual `footage.source` | ข้อความเดียวกับ overlay `source` | **วาดเป็นป้ายเดียวกันให้เอง** (`source_y` = ย้าย) |
+| overlay `highlight` | `x` `y` = **กึ่งกลาง**แถบ · `w` `h` · `color: accent2` · `delay` | แถบไฮไลต์บนตัวหนังสือในภาพจริง · ต้องมี `proof_file` · `h` = ความสูงบรรทัดเดียว |
+| overlay `annotate` | `shape: circle\|underline\|box\|arrow` · `x` `y` = **กึ่งกลาง** · `w` `h` · arrow ใช้ `from [x,y]` `to [x,y]` | เส้นวาดมือ 1 ชิ้นต่อช็อต |
+| visual `treat` | `print` (รูปพิมพ์ขอบขาวเอียงบนกระดาษ) · `duotone` (ขาวดำย้อมสีแบรนด์) | ใช้กับ `proof_file` หรือภาพ AI |
+| overlay `keyword` | `lines[]` ≤3 · `y` = **กึ่งกลาง** (ค่าเริ่ม 56) | การ์ดอก กล่องสีเน้น 1 กล่องต่อบรรทัด · ห้ามทับหน้า |
+| overlay `name` · `docchip` | `name` + `role` · `y` (ขอบบน 52) / `text` + `meta` · `y` (กึ่งกลาง 56) | ป้ายชื่อคน · เอกสารแผ่นเล็กบนอก |
 
 ## Gotchas
 

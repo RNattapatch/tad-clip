@@ -51,12 +51,17 @@ command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null || 
 
 ถ้าขึ้น `NO BREW` ให้หยุดตรงนี้แล้วบอกผู้ใช้ประมาณนี้ (คุณติดตั้งให้ไม่ได้ เพราะต้องพิมพ์รหัสผ่านเครื่อง):
 
-> เครื่องนี้ยังไม่มี Homebrew ซึ่งเป็นตัวติดตั้งโปรแกรมของ Mac ขอให้ทำ 3 ขั้นนี้ครับ
+> เครื่องนี้ยังไม่มี Homebrew ซึ่งเป็นตัวติดตั้งโปรแกรมของ Mac ขอให้ทำตามนี้ครับ (ต้องใช้บัญชีผู้ใช้ที่เป็น admin ของเครื่อง)
 > 1. กด Cmd+Space พิมพ์ Terminal แล้วกด Enter
 > 2. วางบรรทัดนี้แล้วกด Enter: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
-> 3. ถ้าถามรหัสผ่าน ให้พิมพ์รหัสที่ใช้เข้าเครื่อง (ตัวอักษรจะไม่ขึ้นบนจอ เป็นเรื่องปกติ) แล้วกด Enter รอจนขึ้นว่า Installation successful
+> 3. ถ้าถาม Password ให้พิมพ์รหัสที่ใช้เข้าเครื่อง (ตัวอักษรจะไม่ขึ้นบนจอ เป็นเรื่องปกติ) แล้วกด Enter
+> 4. ถ้าขึ้นว่า Press RETURN/ENTER to continue ให้กด Enter อีกครั้ง แล้วรอ 5–15 นาทีจนขึ้นว่า Installation successful
+> 5. ท้ายสุดจะมีหัวข้อ Next steps พร้อมคำสั่ง 1–2 บรรทัด (ขึ้นต้นด้วย `echo` และ `eval`) ให้ก๊อปไปวางใน Terminal แล้วกด Enter ทีละบรรทัด ขั้นนี้ทำให้เครื่องรู้จักคำสั่ง brew
 >
 > เสร็จแล้วพิมพ์บอกผมว่า "ติดตั้ง tad-clip ต่อ"
+
+ถ้าผู้ใช้บอกว่าขึ้น "is not in the sudoers" หรือ "Need sudo access" แปลว่าบัญชีนี้ไม่ใช่ admin ให้เขาเข้าบัญชี admin ของเครื่องแล้วทำใหม่
+(ถ้าลืมขั้น 5 ไม่เป็นไร setup หา brew ใน `/opt/homebrew` กับ `/usr/local` เองอยู่แล้ว)
 
 เจอ brew แล้วค่อยดูรายการ:
 
@@ -70,7 +75,7 @@ Windows (โหลด uv ตัวเดียวก่อน ~20 MB ไม่�
 ```bash
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
 powershell -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = 0; [Net.ServicePointManager]::SecurityProtocol = 3072; $h = $env:TAD_CLIP_HOME; if (-not $h) { $h = Join-Path $env:USERPROFILE .tad-clip }; $b = Join-Path $h bin; New-Item -ItemType Directory -Force -Path $b | Out-Null; $z = Join-Path $b uv.zip; Invoke-WebRequest -UseBasicParsing -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath $b; Remove-Item $z'
-"$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py"
+UV_PYTHON_INSTALL_DIR="$TC_HOME/python" UV_PYTHON_BIN_DIR="$TC_HOME/python/bin" UV_CACHE_DIR="$TC_HOME/cache/uv" UV_PYTHON_INSTALL_REGISTRY=0 "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py"
 nvidia-smi -L 2>/dev/null || echo "no NVIDIA"
 ```
 
@@ -117,7 +122,7 @@ Windows (ใส่ `--with-cutout` เฉพาะเมื่อผู้ใช
 
 ```bash
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
-"$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py" --yes
+UV_PYTHON_INSTALL_DIR="$TC_HOME/python" UV_PYTHON_BIN_DIR="$TC_HOME/python/bin" UV_CACHE_DIR="$TC_HOME/cache/uv" UV_PYTHON_INSTALL_REGISTRY=0 "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 "$K/engine/install/setup.py" --yes
 ```
 
 ต่อท้าย `--model medium` ถ้าผู้ใช้เลือก medium
@@ -211,12 +216,13 @@ claude plugin marketplace update pun-nattapatch && claude plugin update tad-clip
 
 2. ให้ผู้ใช้ปิดแล้วเปิดแอป Claude ใหม่ (skill รุ่นใหม่จะโหลดตอนเปิดแอป)
 3. รัน setup ซ้ำแบบ A3 เพื่อลงของที่รุ่นใหม่ต้องใช้ (ของเดิมข้ามหมด ไม่ต้องโหลดโมเดลใหม่)
-4. อัปเดตตัวโหลดคลิปจากเว็บ (เว็บเปลี่ยนบ่อย ถ้าโหลดไม่ได้ให้ทำข้อนี้): Mac `brew upgrade yt-dlp` · Windows `"$TC_HOME/bin/yt-dlp.exe" -U`
+4. อัปเดตตัวโหลดคลิปจากเว็บ (เว็บเปลี่ยนบ่อย ถ้าโหลดไม่ได้ให้ทำข้อนี้) ใช้ brew ด้วย path เต็ม เพราะบางเครื่องยังไม่ได้เพิ่ม brew ลง PATH:
+   Mac `B="$(command -v brew || ls /opt/homebrew/bin/brew /usr/local/bin/brew 2>/dev/null | head -1)"; "$B" upgrade yt-dlp` · Windows `"$TC_HOME/bin/yt-dlp.exe" -U`
 5. รันข้อ C ให้เห็นว่าทุกอย่าง ✅
 
 การตั้งค่า โมเดล และคลังมีมอยู่ใน `~/.tad-clip` ไม่หายตอนอัปเดต
 
-ถ้าผู้ใช้อยากลบ tad-clip ทิ้ง: ถอน plugin ใน `/plugin` แล้วลบโฟลเดอร์ `~/.tad-clip` (โมเดลถอดเสียงอยู่ในนั้น คืนพื้นที่ได้หลาย GB) ส่วนโปรแกรมที่ลงผ่าน Homebrew บน Mac ใช้กับงานอื่นได้ จะเก็บไว้ก็ได้
+ถ้าผู้ใช้อยากลบ tad-clip ทิ้ง: ถอน plugin ใน `/plugin` แล้วลบโฟลเดอร์ `~/.tad-clip` ทั้งโฟลเดอร์ (โมเดลถอดเสียง Python ของ kit แคชดาวน์โหลด และน้ำหนักโมเดลตัดพื้นหลังอยู่ในนั้นทั้งหมด คืนพื้นที่ได้หลาย GB) ส่วนโปรแกรมที่ลงผ่าน Homebrew บน Mac ใช้กับงานอื่นได้ จะเก็บไว้ก็ได้
 
 ## จบงานทุกครั้ง
 

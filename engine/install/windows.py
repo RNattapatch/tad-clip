@@ -5,11 +5,8 @@ These are the same files GitHub Actions downloads on windows-latest, so what CI 
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
-import time
-import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -39,32 +36,9 @@ def bin_dir() -> Path:
 
 
 def download(url: str, dest, label: str = "") -> Path:
-    """Stream to <dest>.part and rename when complete; 3 tries; progress every 10 %."""
-    dest = Path(dest)
-    part = dest.with_name(dest.name + ".part")
-    last = None
-    for attempt in range(1, 4):
-        try:
-            print(f"  โหลด {label or url} …", flush=True)
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r, open(part, "wb") as f:
-                total, got, step = int(r.headers.get("Content-Length") or 0), 0, 10
-                while True:
-                    chunk = r.read(1 << 20)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    got += len(chunk)
-                    if total and got * 100 // total >= step:
-                        print(f"    {got * 100 // total}% ({got >> 20} / {total >> 20} MB)", flush=True)
-                        step = got * 100 // total // 10 * 10 + 10
-            os.replace(part, dest)
-            return dest
-        except (OSError, urllib.error.URLError) as e:
-            last = e
-            if part.exists():
-                part.unlink()
-            time.sleep(2 * attempt)
-    raise kit.KitError(f"โหลด {label or url} ไม่สำเร็จ ({last}) — เช็คอินเทอร์เน็ต แล้วสั่งติดตั้งใหม่อีกครั้ง")
+    """Verified download into <home>/bin (resumes inside this run, never glues onto a .part from an older run:
+    these are "latest" files that may have changed since)."""
+    return inst.download_resumable(url, dest, label or url, tries=3, resume_existing=False)
 
 
 def _fetch_json(url: str):
@@ -75,15 +49,20 @@ def _fetch_json(url: str):
 def extract(zip_path, wanted: dict) -> None:
     """Copy members whose file name (any folder) is a key of `wanted` to wanted[name]."""
     keys = {k.lower(): Path(v) for k, v in wanted.items()}
-    with zipfile.ZipFile(zip_path) as z:
-        for info in z.infolist():
-            base = info.filename.rsplit("/", 1)[-1].lower()
-            if base in keys and not info.is_dir():
-                with z.open(info) as src, open(keys[base], "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            for info in z.infolist():
+                base = info.filename.rsplit("/", 1)[-1].lower()
+                if base in keys and not info.is_dir():
+                    with z.open(info) as src, open(keys[base], "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+    except (zipfile.BadZipFile, EOFError) as e:
+        raise kit.KitError(f"ไฟล์ zip ที่โหลดมาเสีย ({Path(zip_path).name}: {e}) — มักเกิดจากเน็ตหลุดหรือเว็บตอบกลับเป็นหน้า error "
+                           f"รันใหม่ได้เลย: {inst.setup_command()}") from e
     missing = [k for k, v in keys.items() if not v.exists()]
     if missing:
-        raise kit.KitError(f"ในไฟล์ {Path(zip_path).name} ไม่มี {', '.join(missing)} — ไฟล์ที่โหลดมาอาจไม่ครบ ลองติดตั้งใหม่")
+        raise kit.KitError(f"ในไฟล์ {Path(zip_path).name} ไม่มี {', '.join(missing)} — ไฟล์ที่โหลดมาอาจไม่ครบ "
+                           f"รันใหม่: {inst.setup_command()}")
 
 
 def _from_zip(url: str, label: str, wanted: dict) -> None:
@@ -122,6 +101,14 @@ def ffmpeg_urls() -> list:
     return out
 
 
+AV_HINT = "โปรแกรมกันไวรัสอาจกักไฟล์ไว้ — เปิด Windows Security ดูประวัติการป้องกันแล้วกดอนุญาตไฟล์นี้"
+
+
+def _runs(exe: Path, *args: str) -> bool:
+    code, _ = inst._out([exe, *(args or ("--version",))], timeout=90)
+    return code == 0
+
+
 def ensure_ffmpeg() -> tuple:
     b = bin_dir()
     ff, fp = b / "ffmpeg.exe", b / "ffprobe.exe"
@@ -132,10 +119,14 @@ def ensure_ffmpeg() -> tuple:
     for url in ffmpeg_urls():
         try:
             _from_zip(url, "ffmpeg (ไฟล์ zip ~200 MB)", {"ffmpeg.exe": ff, "ffprobe.exe": fp})
-            return str(ff), str(fp)
         except kit.KitError as e:
             last = e
             print(f"  ⚠️ {e} — ลองชุดถัดไป", flush=True)
+            continue
+        if inst.has_libass(str(ff)):
+            return str(ff), str(fp)
+        last = kit.KitError(f"ffmpeg.exe ที่โหลดมาเปิดไม่ได้ — {AV_HINT} แล้วรันใหม่: {inst.setup_command()}")
+        print(f"  ⚠️ {last}", flush=True)
     raise last
 
 
@@ -144,26 +135,46 @@ def ensure_node() -> str:
     if node.exists() and inst.node_major(str(node)) >= inst.NODE_MIN:
         print(f"  ✓ Node.js มีอยู่แล้ว ({node})", flush=True)
         return str(node)
-    v, url = pick_node(_fetch_json(NODE_INDEX_URL))
+    try:
+        index = _fetch_json(NODE_INDEX_URL)
+    except (OSError, ValueError) as e:   # URLError (offline, DNS, proxy) is an OSError
+        raise kit.KitError(f"ต่อ nodejs.org ไม่ได้ ({e}) — เช็คอินเทอร์เน็ต แล้วรันใหม่: {inst.setup_command()}") from e
+    v, url = pick_node(index)
     _from_zip(url, f"Node.js {v} (~35 MB)", {"node.exe": node})
+    if inst.node_major(str(node)) < inst.NODE_MIN:
+        raise kit.KitError(f"node.exe ที่โหลดมาเปิดไม่ได้ — {AV_HINT} แล้วรันใหม่: {inst.setup_command()}")
     return str(node)
+
+
+def _drop(exe: Path) -> None:
+    try:
+        exe.unlink()
+    except OSError:
+        pass   # locked or quarantined: the download below replaces it or reports why
 
 
 def ensure_uv() -> str:
     uv = bin_dir() / "uv.exe"
-    if uv.exists():
+    if uv.exists() and _runs(uv):
         print(f"  ✓ uv มีอยู่แล้ว ({uv})", flush=True)
         return str(uv)
+    _drop(uv)
     _from_zip(UV_URL, "uv (~20 MB)", {"uv.exe": uv})
+    if not _runs(uv):
+        raise kit.KitError(f"uv.exe ที่โหลดมาเปิดไม่ได้ — {AV_HINT} แล้วรันใหม่: {inst.setup_command()}")
     return str(uv)
 
 
 def ensure_ytdlp() -> str:
+    """yt-dlp only fetches web clips: if antivirus blocks it the rest of the kit still works → warn, don't stop."""
     exe = bin_dir() / "yt-dlp.exe"
-    if exe.exists():
+    if exe.exists() and _runs(exe):
         print(f"  ✓ yt-dlp มีอยู่แล้ว ({exe})", flush=True)
         return str(exe)
+    _drop(exe)
     download(YTDLP_URL, exe, "yt-dlp (~18 MB)")
+    if not _runs(exe):
+        print(f"  ⚠️ yt-dlp.exe เปิดไม่ได้ ({AV_HINT}) — ตัดคลิปได้ปกติ แค่โหลดคลิปจากเว็บไม่ได้จนกว่าจะอนุญาต", flush=True)
     return str(exe)
 
 

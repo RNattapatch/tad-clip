@@ -1,3 +1,3 @@
 # Optional cut-out add-on (setup.py --with-cutout). On Windows setup installs torch + torchvision first from
 # https://download.pytorch.org/whl/cpu (no NVIDIA card) or the CUDA index (NVIDIA), so pip does not pull a different build.
-transparent-background>=1.3
+transparent-background>=1.3,<2

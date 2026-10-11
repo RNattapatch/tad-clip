@@ -341,3 +341,69 @@ test('SKILL.md: sfx_mix is always called, even with no effects, because it owns 
   assert.match(skill, /sfx\.json[^\n]*\[\][^\n]*limiter|\[\][^\n]*sfx_mix|ไม่มีเอฟเฟกต์[^\n]*\[\]/);
   assert.doesNotMatch(skill, /copy `preview-composite-subs\.mp4`/);
 });
+
+// ---- dogfood round: the skill text must say what the engine now does ----
+const section = (skill, from, to) => { const a = skill.indexOf(from); const b = to ? skill.indexOf(to, a + 1) : skill.length; assert.ok(a >= 0, `missing ${from}`); return skill.slice(a, b < 0 ? skill.length : b); };
+
+test('SKILL.md C1: the opening media question is the same four options as tad-clip step 1 (cards are always on, not a question)', () => {
+  const c1 = section(readSkill(), '### C1.', '### C2.');
+  assert.ok(c1.includes('ภาพจริง/หลักฐาน · คลิปจริง · มีม · เสียงเอฟเฟกต์'), 'exact option list');
+  assert.match(c1, /การ์ดข้อความ\/กราฟิก[^\n]*(ทำให้เสมอ|ทำให้อยู่แล้ว)[^\n]*ไม่ต้องถาม/);
+  assert.doesNotMatch(c1, /ให้ใช้ 4 ข้อแรก/, 'no "first four" guesswork');
+  assert.ok(c1.includes('"ให้ Claude หาจากเน็ตให้" · "ผมมีไฟล์เอง (บอกโฟลเดอร์)" · "ผสมกัน"'), 'second question unchanged');
+});
+
+test('SKILL.md D14: Pexels/Pixabay steps that work (allowed_domains, WebFetch, engine adds the size params, author passed in)', () => {
+  const skill = readSkill();
+  const c2 = section(skill, '### C2.', '### C3.');
+  assert.doesNotMatch(skill, /site:pexels\.com|site:pixabay\.com/, 'the site: operator returns other sites');
+  assert.match(c2, /allowed_domains/);
+  assert.match(c2, /WebFetch/);
+  assert.match(c2, /403/);
+  assert.match(c2, /--author/);
+  assert.match(c2, /h=1080&w=1920|ขนาดให้เอง|เติมขนาดให้เอง/, 'says the engine adds the size params');
+  assert.match(c2, /4K/, 'warns that the bare download URL is 4K');
+  const all = bashBlocks(skill).map(l => l.join('\n')).join('\n');
+  assert.match(all, /engine\.fetch video "https:\/\/www\.pexels\.com/, 'a written-out Pexels video command');
+  assert.match(all, /engine\.fetch image "https:\/\/images\.pexels\.com/, 'a written-out Pexels photo command');
+  assert.match(c2, /Pexels License/);
+});
+
+test('SKILL.md D13: memes in "ทำรวดเดียว" mode have a defined fallback (own library → candidates list + text cards, never statues)', () => {
+  const c2 = section(readSkill(), '### C2.', '### C3.');
+  assert.match(c2, /ทำรวดเดียว/);
+  assert.match(c2, /library_dir/);
+  assert.match(c2, /รูปปั้น/);
+  assert.match(c2, /ภาพวาด/);
+  assert.match(c2, /3-5/);
+  assert.match(c2, /meme-candidates\.md/);
+  assert.match(c2, /การ์ด(มุก|ข้อความ)/);
+  assert.match(c2, /อนุมัติ/);
+  assert.match(readSkill(), /ห้ามเอารูปปั้น/, 'also in the do-not list');
+});
+
+test('SKILL.md D12: only the main session writes CREDITS.md, subagents return text, the facts table header is defined', () => {
+  const skill = readSkill();
+  const c4 = section(skill, '### C4.', '### C5.');
+  assert.match(c4, /เฉพาะ session หลัก/);
+  assert.match(c4, /subagent[^\n]*(คืน|ส่งกลับ)[^\n]*ข้อความ/);
+  assert.ok(c4.includes('| ข้อความบนจอ | แหล่ง | ปี | ลิงก์ | หมายเหตุ |'), 'facts table header');
+  assert.match(c4, /ตรวจข้อเท็จจริง/);
+  const all = bashBlocks(skill).map(l => l.join('\n')).join('\n');
+  assert.ok(all.includes('"$PY" -m engine.fetch fact '), 'a written-out fact command');
+  assert.match(skill, /--credit-file[^\n]*session หลัก|session หลัก[^\n]*--credit-file/);
+  assert.match(skill, /ห้าม subagent เขียน/);
+});
+
+test('SKILL.md D15/D16: contact sheets and scene cuts go through engine.fetch (unique names, sized to the clip, explicit "no cuts")', () => {
+  const skill = readSkill();
+  const c7 = section(skill, '### C7.');
+  const all = bashBlocks(skill).map(l => l.join('\n')).join('\n');
+  assert.ok(all.includes('"$PY" -m engine.fetch sheet '));
+  assert.ok(all.includes('"$PY" -m engine.fetch scenes '));
+  assert.doesNotMatch(skill, /tile=6x4|footage\/sheet\.jpg|pts_time/, 'the fixed-name / fixed-layout ffmpeg one-liners are gone');
+  assert.match(c7, /ไม่พบจุดตัดฉาก/);
+  assert.match(c7, /-sheet\.jpg/);
+  assert.match(c7, /24 ช่อง/);
+  for (const cmd of ['`fact`', '`sheet`', '`scenes`']) assert.ok(skill.includes(cmd), `tools table lists ${cmd}`);
+});

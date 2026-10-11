@@ -33,17 +33,16 @@ WHISPER_REPOS = {
     "large-v3": "Systran/faster-whisper-large-v3", "large": "Systran/faster-whisper-large-v3",
     "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
     "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 # download size in MB, for the "this needs N GB" message before installing
-WHISPER_MB = {"tiny": 75, "base": 145, "small": 485, "medium": 1530, "large-v3-turbo": 1620, "turbo": 1620,
-              "large-v1": 3090, "large-v2": 3090, "large-v3": 3090, "large": 3090}
+WHISPER_MB = {"tiny": 75, "base": 145, "small": 485, "medium": 1530, "large-v1": 3090, "large-v2": 3090, "large-v3": 3090, "large": 3090}
 MODEL_FILES = ("model.bin", "config.json", "tokenizer.json")
-# whisper.cpp models (macOS backend, Metal) — exact sizes from huggingface.co/ggerganov/whisper.cpp, used to verify downloads
-GGML_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{model}.bin"
+# whisper.cpp models (macOS backend, Metal), pinned to one revision of huggingface.co/ggerganov/whisper.cpp so the
+# exact sizes below (read from that revision's file tree) stay true and a download can be verified byte for byte
+GGML_REV = "5359861c739e955e79d9a303bcbc70fb988958b1"
+GGML_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/" + GGML_REV + "/ggml-{model}.bin"
 GGML_BYTES = {"tiny": 77691713, "base": 147951465, "small": 487601967, "medium": 1533763059,
-              "large-v2": 3094623691, "large-v3": 3095033483, "large-v3-turbo": 1624555275}
+              "large-v2": 3094623691, "large-v3": 3095033483}
 
 
 def utf8_stdio() -> None:
@@ -180,23 +179,44 @@ def ggml_state(model: str) -> tuple:
     return True, str(f)
 
 
-def download_resumable(url: str, dest, label: str, expected: int = None, tries: int = 4) -> Path:
-    """Big-file download that survives dropped connections: appends to <dest>.part with HTTP Range,
-    verifies the size the server reports (and `expected` when given), then renames into place."""
+def _size(n: int) -> str:
+    return f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB" if n >= 1e6 else f"{n} ไบต์"
+
+
+def download_resumable(url: str, dest, label: str, expected: int = None, tries: int = 5,
+                       resume_existing: bool = True) -> Path:
+    """Download that survives dropped connections, verified before it is renamed into place.
+
+    Bytes go to <dest>.part. A connection that dies or simply closes early leaves the .part on disk and the next
+    attempt asks for the rest with `Range: bytes=<size>-` (backoff 1, 2, 4, 8 s). The finished size must equal
+    `expected` or what the server announced (Content-Length / Content-Range). A .part larger than that, or a 416
+    for one, is thrown away and the download restarts. `resume_existing=False` drops a .part left by an earlier
+    run first (for "latest" files that may have changed since).
+    """
     dest = Path(dest)
     part = dest.with_name(dest.name + ".part")
-    last = None
+    if not resume_existing and part.exists():
+        part.unlink()
+    last, want = None, expected
     for attempt in range(1, tries + 1):
+        if attempt > 1:
+            time.sleep(min(2 ** (attempt - 2), 30))
         have = part.stat().st_size if part.exists() else 0
-        req = urllib.request.Request(url, headers={"User-Agent": "tad-clip-setup", **({"Range": f"bytes={have}-"} if have else {})})
+        if want and have > want:   # not ours / corrupt → start over
+            part.unlink()
+            have = 0
+        headers = {"User-Agent": "tad-clip-setup"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
                 rng = r.headers.get("Content-Range") or ""
                 if have and getattr(r, "status", 200) == 206 and rng:
                     total, mode = int(rng.rsplit("/", 1)[1]), "ab"
-                else:   # server sent the whole file → start over
+                else:   # the server sent the whole file → start over
                     have, total, mode = 0, int(r.headers.get("Content-Length") or 0), "wb"
-                print(f"  โหลด {label} {total / 1e9:.2f} GB" + (f" (ต่อจากเดิม {have / 1e9:.2f} GB)" if have else "") + " …", flush=True)
+                want = expected or total or want
+                print(f"  โหลด {label} {_size(want) if want else ''}" + (f" (ต่อจากเดิม {_size(have)})" if have else "") + " …", flush=True)
                 got, step = have, 5
                 with open(part, mode) as f:
                     while True:
@@ -205,28 +225,35 @@ def download_resumable(url: str, dest, label: str, expected: int = None, tries: 
                             break
                         f.write(chunk)
                         got += len(chunk)
-                        if total and got * 100 // total >= step:
-                            print(f"    {got * 100 // total}% ({got >> 20} / {total >> 20} MB)", flush=True)
-                            step = got * 100 // total // 5 * 5 + 5
+                        if want and got * 100 // want >= step:
+                            print(f"    {got * 100 // want}% ({got >> 20} / {want >> 20} MB)", flush=True)
+                            step = got * 100 // want // 5 * 5 + 5
         except urllib.error.HTTPError as e:
-            if e.code == 416 and expected and have == expected:   # already complete
-                os.replace(part, dest)
-                return dest
             last = e
-        except OSError as e:   # dropped connection: keep the .part, the next try resumes it
-            last = e
-            time.sleep(2 * attempt)
+            if e.code == 416:   # asked for bytes past the end: either already complete or a bad .part
+                rng = (e.headers.get("Content-Range") if e.headers else "") or ""
+                total = int(rng.rsplit("/", 1)[1]) if rng.rsplit("/", 1)[-1].isdigit() else 0
+                if have and have == (expected or total):
+                    os.replace(part, dest)
+                    return dest
+                if part.exists():
+                    part.unlink()
             continue
-        else:
-            size = part.stat().st_size if part.exists() else 0
-            want = expected or total
-            if want and size != want:
-                part.unlink()
-                raise kit.KitError(f"โหลด {label} ได้ขนาดไม่ตรง ({size} จาก {want} ไบต์) — สั่งติดตั้งใหม่อีกครั้ง")
-            os.replace(part, dest)
-            return dest
-        time.sleep(2 * attempt)
-    raise kit.KitError(f"โหลด {label} ไม่สำเร็จ ({last}) — เช็คอินเทอร์เน็ต แล้วสั่งติดตั้งใหม่ (ส่วนที่โหลดแล้วไม่หาย)")
+        except (OSError, ValueError) as e:   # reset, timeout, offline: keep the .part, the next try resumes it
+            last = e
+            continue
+        size = part.stat().st_size if part.exists() else 0
+        if want and size < want:     # clean early close: keep the .part and ask for the rest
+            last = f"ได้ {_size(size)} จาก {_size(want)}"
+            continue
+        if want and size > want:
+            part.unlink()
+            last = f"ได้ไฟล์ใหญ่เกิน ({size} จาก {want} ไบต์)"
+            continue
+        os.replace(part, dest)
+        return dest
+    raise kit.KitError(f"โหลด {label} ไม่สำเร็จ ({last}) — เช็คอินเทอร์เน็ต แล้วรันใหม่ "
+                       f"(ส่วนที่โหลดแล้วไม่หาย): {setup_command()}")
 
 
 def chrome_candidates() -> list:
@@ -349,7 +376,7 @@ def free_bytes(path) -> int:
     return shutil.disk_usage(str(p)).free
 
 
-LIGHT_MODEL = "medium"   # what to offer a low-RAM machine (large-v3-turbo transcribes Thai badly)
+LIGHT_MODEL = "medium"   # what to offer a low-RAM machine
 
 
 def low_ram(ram: int | None) -> bool:
@@ -362,12 +389,17 @@ def setup_command(extra: str = "") -> str:
     setup = (kit.KIT_ROOT / "engine" / "install" / "setup.py").as_posix()
     tail = f' --yes{" " + extra if extra else ""}'
     if kit.IS_WINDOWS:
+        py = kit.venv_python()
+        if py.exists():   # setup.py is stdlib-only: the kit's own Python 3.12 runs it
+            return f'"{py.as_posix()}" "{setup}"{tail}'
         uv = kit.home() / "bin" / "uv.exe"
         try:
             uv = Path(kit.tool("uv"))
         except (kit.KitError, ValueError):   # ValueError = broken config.json, reported by doctor's setup row
             pass
-        return f'"{uv.as_posix()}" run --no-project --python 3.12 "{setup}"{tail}'
+        h = kit.home().as_posix()   # same dirs as setup.kit_dirs(): uv's Python + cache stay inside the kit home
+        return (f'UV_PYTHON_INSTALL_DIR="{h}/python" UV_PYTHON_BIN_DIR="{h}/python/bin" UV_CACHE_DIR="{h}/cache/uv" '
+                f'UV_PYTHON_INSTALL_REGISTRY=0 "{uv.as_posix()}" run --no-project --python 3.12 "{setup}"{tail}')
     return f'python3 "{setup}"{tail}'
 
 

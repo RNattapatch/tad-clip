@@ -23,7 +23,7 @@ export const OVERLAYS = ['image', 'hook-pill', 'label', 'counter', 'chat', 'anno
 export const BEATS = ['cold-open', 'question', 'context', 'mechanism', 'turn', 'proof', 'so-what'];   // look vox · references/vox-style.md §1
 // output presets (config.output.preset · plan.preset): every number in a plan stays in 1080×1920 design space
 export const PRESETS = {
-  '1080p': { render_scale: 1 },                              // 1080×1920 at the source fps (capped at 60)
+  '1080p': { render_scale: 1, max_fps: 30 },                 // 1080×1920 at the source fps capped at 30 (60 fps doubles render time + file size for no gain on a phone)
   '2k60': { fps: 60, render_scale: 4 / 3, card_scale: 1 },   // 1440×2560 @ 60 · full cards drawn at 1080 + lanczos (vox grain hangs Chrome at 2K)
 };
 export const COMMANDS = ['check', 'all', 'board', 'cards', 'motion', 'loose', 'animatic', 'prompts', 'compose', 'subs', 'sheet'];
@@ -112,6 +112,9 @@ export function load(planFile, args = []) {
     if (v.panel) v.panel = tone(v.panel);
     if (v.card && v.card.theme) v.card.theme = tone(v.card.theme);
     (s.overlays || []).forEach(o => { if (o.color) o.color = tone(o.color); });
+    // visual.footage.source → the same on-screen chip an overlay `source` draws (same default spot, y 14 %)
+    if (v.footage && v.footage.source && !(s.overlays || []).some(o => o.type === 'source'))
+      s.overlays = [...(s.overlays || []), { type: 'source', text: v.footage.source, ...(v.footage.source_y != null ? { y: v.footage.source_y } : {}), _from: 'footage.source' }];
   });
   OUT = resolve(PLAN_DIR, plan.out || 'out');
   PRESET = plan.preset || cfg.output?.preset || '1080p';
@@ -119,12 +122,54 @@ export function load(planFile, args = []) {
   K = plan.render_scale ?? P.render_scale ?? 1;
   CARD_SCALE = plan.card_scale ?? P.card_scale;
   const srcFps = fps0(probe(planPath(plan.source_video)));
-  FPS = plan.fps ?? P.fps ?? (srcFps ? Math.min(60, Math.round(srcFps)) : 30);
+  FPS = plan.fps ?? P.fps ?? (srcFps ? Math.min(P.max_fps ?? 60, Math.round(srcFps)) : 30);
   STEP = plan.look === 'vox' ? (plan.graphics_fps ?? 12) : 0;
   SPEAKER = (cfg.speaker && cfg.speaker.name) || 'ผู้พูด';
   ENGINE = machineEngine(cfg);
   return { plan, planDir: PLAN_DIR, out: OUT, preset: PRESET, fps: FPS, renderScale: K, cardScale: CARD_SCALE, speaker: SPEAKER, cutoutEngine: ENGINE };
 }
+
+// ---------------------------------------------------------------- subtitles: where the band sits in each shot
+// same placement rules as `subs`: shot.sub_y › split → plan.split_sub_y (59 %) › the .ass Default style (MarginV / PlayResY)
+const assTime = t => { const [h, m, x] = t.split(':'); return +h * 3600 + +m * 60 + +x; };
+function readAss() {
+  const f = planPath(plan.subs); if (!f || !existsSync(f)) return null;
+  const lines = readFileSync(f, 'utf8').replace(/^﻿/, '').split(/\r?\n/);
+  const playY = +((lines.find(l => l.startsWith('PlayResY:')) || 'PlayResY: 1280').split(':')[1]);
+  const st = (lines.find(l => l.startsWith('Style: Default,')) || '').split(',');
+  const dialogues = lines.filter(l => l.startsWith('Dialogue:')).map(l => { const g = l.split(','); return { a: assTime(g[1]), b: assTime(g[2]), text: g.slice(9).join(',').replace(/\{[^}]*\}/g, '').trim() }; });
+  return { playY, fs: +st[2] || 60, mv: +st[st.length - 2] || 340, dialogues };
+}
+// → { top, base, size, text } in 1080×1920 px, or null (full-card: cards keep clear of the band themselves · no speech in the shot)
+function subBand(s, ass) {
+  if (s.layout === 'full-card') return null;
+  const playY = ass ? ass.playY : 1280, fs = ass ? ass.fs : (cfg.subtitle?.size ?? 60), mv = ass ? ass.mv : (cfg.subtitle?.margin_v ?? 340);
+  const lines = ass ? ass.dialogues.filter(d => (d.a + d.b) / 2 >= s.t[0] && (d.a + d.b) / 2 < s.t[1]) : null;
+  if (ass && !lines.length) return null;
+  const pct = s.sub_y ?? (s.layout === 'split' ? (plan.split_sub_y ?? 59) : (1 - mv / playY) * 100);
+  const base = pct / 100 * H, size = fs / playY * H, mid = (s.t[0] + s.t[1]) / 2;
+  const pick = lines && (lines.find(d => d.a <= mid && d.b > mid) || lines[0]);
+  return { top: base - size * 1.3, base, size, text: pick ? pick.text : '' };
+}
+// rough on-screen box of an overlay (px, 1080×1920) from its type, position and text length — for collision warnings only
+const chars = t => String(t || '').replace(/\*/g, '').replace(/[ัิ-ฺ็-๎]/g, '').length;
+const kwSize = ls => { const w = Math.max(...ls.map(chars)); return (w <= 5 ? 190 : w <= 8 ? 150 : w <= 11 ? 120 : w <= 15 ? 96 : 78) * .82; };
+export function overlayBox(o) {
+  const X = v => v / 100 * W, Y = v => v / 100 * H;
+  if (o.type === 'hook-pill') { const w = Math.min(960, chars(o.text) * 33 + 88), cy = Y(o.y ?? 50); return [540 - w / 2, cy - 64, 540 + w / 2, cy + 64]; }
+  if (o.type === 'label') { const w = chars(o.text) * 30 + 68, cx = X(o.x ?? 50), cy = Y(o.y ?? 30); return [cx - w / 2, cy - 48, cx + w / 2, cy + 48]; }
+  if (o.type === 'chat') { const hs = (o.messages || []).map(m => Math.max(1, Math.ceil(chars(m.text) / 24)) * 78 + 44);
+    const hh = hs.reduce((a, b) => a + b, 0) + 26 * Math.max(0, hs.length - 1), top = o.y != null ? Y(o.y) : Y(25) - hh / 2; return [60, top, 1020, top + hh]; }
+  if (o.type === 'keyword') { const ls = o.lines || [], sz = Math.min(o.size || 999, kwSize(ls.length ? ls : [''])), hh = ls.length * (sz * 1.12 + 24), w = Math.max(...ls.map(chars), 1) * sz * .6 + 60, cy = Y(o.y ?? 56);
+    return [540 - w / 2, cy - hh / 2, 540 + w / 2, cy + hh / 2]; }
+  if (o.type === 'name') { const top = Y(o.y ?? 52); return [230, top, 850, top + 160]; }
+  if (o.type === 'docchip') { const cy = Y(o.y ?? 56); return [90, cy - 75, 990, cy + 75]; }
+  if (o.type === 'source') { const top = Y(o.y ?? 14); return [64, top, 64 + (chars(o.text) + 7) * 17 + 36, top + 55]; }
+  if (o.type === 'counter') return [810, 300, 1020, 384];
+  return null;   // image · highlight · annotate sit on purpose over pictures and text
+}
+const overlapY = (a, b) => Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+const overlapX = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
 
 // ---------------------------------------------------------------- check
 export function check() {
@@ -135,6 +180,7 @@ export function check() {
   if (plan.source_video && !existsSync(planPath(plan.source_video))) warns.push(`ไม่เจอ source_video "${plan.source_video}" (เทียบกับโฟลเดอร์ของ plan) — compose จะทำไม่ได้`);
   let prevEnd = 0, lastReset = 0;
   const prompts = plan.prompts || {};
+  const ASS = readAss();
   shots.forEach((s, i) => {
     const tag = `shot ${s.id}`;
     if (!LAYOUTS.includes(s.layout)) errs.push(`${tag}: layout "${s.layout}" ไม่รู้จัก (${LAYOUTS.join(' · ')})`);
@@ -192,6 +238,17 @@ export function check() {
     if (!ONCUT && s.layout === 'full-speaker' && (s.overlays || []).some(o => o.type === 'chat' || o.type === 'hook-pill')) warns.push(`${tag}: ฟองแชต/pill บน full-speaker อาจทับหน้า — ดูเฟรมจริง หรือใช้ split + visual.panel`);
     const texts = (s.overlays || []).filter(o => o.type !== 'counter').length;
     if (texts > 2) warns.push(`${tag}: ข้อความซ้อน ${texts} ชั้น (เกิน 2) — จอเล็กอ่านไม่ทัน`);
+    // collisions (estimated from type · position · text length — a warning: open shots/<id>-*.png to confirm)
+    const boxes = (s.overlays || []).map(o => [o, overlayBox(o)]).filter(([, b]) => b);
+    boxes.forEach(([o, a], k) => boxes.slice(k + 1).forEach(([q, b]) => {
+      const area = overlapX(a, b) * overlapY(a, b), small = Math.min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]));
+      if (area > .15 * small) warns.push(`${tag}: ${o.type} กับ ${q.type} ทับกัน (ประมาณจากตำแหน่ง+ความยาวข้อความ) — ขยับ y หรือตัดชิ้นหนึ่งออก · ดู out/shots/${s.id}-${s.layout}.png`);
+    }));
+    const band = subBand(s, ASS);
+    if (band) boxes.forEach(([o, b]) => {
+      const sb = [60, band.top, 1020, band.base + band.size * .25];
+      if (overlapY(b, sb) > .3 * Math.min(b[3] - b[1], sb[3] - sb[1])) warns.push(`${tag}: ${o.type} ทับแถบซับ (ซับอยู่ราว y ${Math.round(band.top / H * 100)}–${Math.round(band.base / H * 100)}%) — ย้าย overlay หรือใส่ sub_y ให้ช็อตนี้`);
+    });
     if (!ONCUT && s.layout === 'full-speaker' && dur(s) > 6 && !(s.overlays || []).length) warns.push(`${tag}: ผู้พูดเต็มจอเปล่าๆ ${dur(s)} วิ — พักได้ไม่เกิน ~6 วิ หรือเติม label`);
   });
   if (plan.face_circle && (plan.face_circle.mode || 'cutout') === 'cutout' && ENGINE === 'off' && (plan.cutout || {}).engine !== 'none')
@@ -410,19 +467,41 @@ function footStill(s) {
   return existsSync(out) ? out : null;
 }
 
+// one real frame of the speaker at the shot's midpoint, cover-cropped to 1080×1920 like compose (mirror applied) → storyboard
+const mirrored = s => (plan.mirror || []).some(([a, b]) => s.t[0] >= a - 0.02 && s.t[1] <= b + 0.02);
+const fresh = (out, src) => existsSync(out) && statSync(out).mtimeMs > statSync(src).mtimeMs;
+function speakerStill(s) {
+  const src = planPath(plan.source_video); if (!src || !existsSync(src)) return null;
+  const out = join(OUT, 'stills', `${s.id}-speaker${mirrored(s) ? '-flip' : ''}.jpg`); mkdirSync(dirname(out), { recursive: true });
+  if (!fresh(out, src)) spawnSync(FFMPEG(), ['-loglevel', 'error', '-y', '-ss', ((s.t[0] + s.t[1]) / 2).toFixed(3), '-i', src, '-frames:v', '1', '-q:v', '3',
+    '-vf', `${sdr(src)}scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}${mirrored(s) ? ',hflip' : ''}`, out]);
+  return existsSync(out) ? out : null;
+}
+const showsSpeaker = s => ['split', 'full-speaker', 'cutout'].includes(s.layout) || (s.layout === 'full-card' && plan.face_circle && s.face !== false);
+
 const boardTitle = () => `${plan.title || basename(PLAN_DIR)} · ${plan.shots.at(-1).t[1]} วิ · ${plan.shots.length} ช็อต`;
 async function board(b) {
-  const shots = plan.shots.map(s => { const bg = bgFor(s) || footStill(s); return { ...s, visual: { ...(s.visual || {}) }, _bg: bg && pathToFileURL(bg).href }; });
+  const ass = readAss(), url = f => f && pathToFileURL(f).href;
+  const shots = plan.shots.map(s => {
+    const bg = bgFor(s) || footStill(s), spk = showsSpeaker(s) ? speakerStill(s) : null, band = subBand(s, ass);
+    return { ...s, visual: { ...(s.visual || {}) }, _bg: url(bg), _spk: url(spk),
+      _win: s.split_window || plan.split_window || [260, 960], _cut: s.cutout_scale ?? (plan.cutout || {}).scale ?? 0.62,
+      _face: plan.face_circle ? { window: [40, 500, 1000], size: 400, card_y: 230, ...plan.face_circle } : null,
+      _sub: band && band.text ? { text: band.text, base: band.base, size: band.size } : null };
+  });
   await b.load({ kind: 'board', title: boardTitle(), shots }, 1232, 800);
   const hgt = await b.evaluate('document.querySelector(".board").scrollHeight');
   await b.load({ kind: 'board', title: boardTitle(), shots }, 1232, hgt);
   await b.evaluate('window.__seek(60000)');   // show every card in its finished state
   writeFileSync(join(OUT, 'storyboard.png'), await b.png());
-  console.log(`✓ storyboard.png (${plan.shots.length} ช็อต)`);
+  const real = shots.filter(s => s._spk).length;
+  console.log(`✓ storyboard.png (${plan.shots.length} ช็อต${real ? ` · เฟรมจริงของผู้พูด ${real} ช็อต` : plan.source_video ? '' : ' · ยังไม่มี source_video: ผู้พูดเป็นภาพตัวแทน'}${ass ? ' · แถบซับจากไฟล์จริง' : ''})`);
 }
 
 async function cards(B) {
   mkdirSync(join(OUT, 'shots'), { recursive: true });
+  const bare = plan.shots.filter(s => !needsRender(s)).map(s => s.id);
+  if (bare.length) console.log(`· ช็อต ${bare.join(', ')} ไม่มีกราฟิก (ผู้พูดเต็มจอ/คลิปล้วน) → ไม่มี PNG — ดูภาพจริงใน storyboard.png`);
   await perShot(B, plan.shots.filter(needsRender), async (b, s) => {
     const bg = bgFor(s);
     await b.load({ kind: 'frame', shot: s, bgImage: bg && pathToFileURL(bg).href, scale: 1 });   // stills at 1080: 2K card PNGs hang Chrome most

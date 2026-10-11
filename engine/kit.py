@@ -124,8 +124,8 @@ def run(cmd: list, **kw) -> subprocess.CompletedProcess:
     kw.setdefault("text", True)
     kw.setdefault("encoding", "utf-8")
     kw.setdefault("errors", "replace")
-    kw.setdefault("stdin", subprocess.DEVNULL)   # PROPOSED: never hand children our stdin
-    kw.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})   # PROPOSED: child pythons write what we decode (utf-8)
+    kw.setdefault("stdin", subprocess.DEVNULL)   # never hand children our stdin (ffmpeg would read it)
+    kw.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})   # child pythons write what we decode
     try:
         res = subprocess.run([str(c) for c in cmd], **kw)
     except FileNotFoundError as e:
