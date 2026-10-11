@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -47,18 +48,37 @@ def _say(msg):
 
 # ── run: video -> audio.wav -> asr.json -> raw cues + review.md ────────────────────────────
 
+_NO_SPEECH = "ถอดเสียงแล้วไม่ได้ซับเลย — เช็คว่าคลิปมีเสียงพูดจริง"
+
+
+def _has_words(result):
+    """True when an ASR result holds at least one real word (specials like [_BEG_] and blanks do not count)."""
+    return any(t.get("text", "").strip() and not t["text"].startswith("[_")
+               for seg in (result or {}).get("transcription", []) for t in seg.get("tokens", []))
+
+
 def _transcribe(wav, prompt):
-    """engine.asr.transcribe -> whisper.cpp -ojf shaped dict. Imported lazily so the rest works without whisper."""
+    """engine.asr.transcribe -> whisper.cpp -ojf shaped dict. Imported lazily so the rest works without whisper.
+
+    faster-whisper sometimes returns nothing at all when it is given an initial prompt (seen on the Windows CI
+    smoke test, different on every call). A prompted run that comes back without words is retried once without
+    the prompt, and says so; still empty is the usual "no speech" error, and nothing is cached as done."""
     fix = "พิมพ์ \"ตรวจเครื่อง tad-clip\" ให้ Claude ติดตั้งส่วนที่ขาดให้"
     try:
         from engine import asr
-        return asr.transcribe(str(wav), prompt=prompt)
+        result = asr.transcribe(str(wav), prompt=prompt)
+        if prompt and not _has_words(result):
+            _say("ตัวถอดเสียงไม่ได้คำพูดเลยเมื่อใส่คำใบ้ — ถอดใหม่อีกครั้งโดยไม่ใส่คำใบ้")
+            result = asr.transcribe(str(wav), prompt=None)
     except kit.KitError:
         raise
     except ImportError as e:
         raise kit.KitError(f"เรียกตัวถอดเสียงไม่ได้ ({e}) — {fix}") from e
     except Exception as e:
         raise kit.KitError(f"ถอดเสียงไม่สำเร็จ ({type(e).__name__}: {e}) — {fix}") from e
+    if not _has_words(result):
+        raise kit.KitError(_NO_SPEECH)
+    return result
 
 
 def extract_audio(src, wav, start_s=None, dur_s=None):
@@ -111,7 +131,7 @@ def build_raw(d, name, max_chars=None, karaoke=False, force=False, cfg=None):
         raise kit.KitError(f"asr.json ใน {d} ไม่ใช่ผลถอดเสียงที่ถูกต้อง — ลบไฟล์นี้แล้วรันใหม่ หรือใช้ --force")
     cues, applied = ms.build_cues(asr, glossary, max_chars)
     if not cues:
-        raise kit.KitError("ถอดเสียงแล้วไม่ได้ซับเลย — เช็คว่าคลิปมีเสียงพูดจริง หรือลองถอดใหม่ด้วย --force")
+        raise kit.KitError(_NO_SPEECH + " หรือลองถอดใหม่ด้วย --force")
     meta = {"name": name, "max_chars": max_chars, "fingerprint": fp, "fixes_applied": [list(a) for a in applied]}
     _write_json(raw_p, {"meta": meta, "cues": cues})
     (d / "raw.srt").write_text(ms.render_srt(cues), encoding="utf-8")
@@ -360,8 +380,21 @@ def filter_path(p):
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def burn_filter(ass, fonts_dir):
-    return f"subtitles={filter_path(ass)}:fontsdir={filter_path(fonts_dir)}"
+def burn_filter(ass_name):
+    """The filter string for ffmpeg run with cwd = the .ass folder: a bare file name and the relative `fonts`
+    folder, so no drive letter or Thai user-folder path ever reaches the filter parser."""
+    return f"subtitles={filter_path(ass_name)}:fontsdir=fonts"
+
+
+def _copy_fonts(dest):
+    """Copy the bundled fonts (and their license text) into dest so libass can read them by a relative path."""
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in kit.fonts_dir().iterdir():
+            if f.suffix.lower() in (".ttf", ".otf", ".txt"):
+                shutil.copyfile(f, dest / f.name)
+    except OSError as e:
+        raise kit.KitError(f"สร้างโฟลเดอร์ฟอนต์ {dest} ข้างไฟล์ซับไม่ได้ ({e}) — ย้ายไฟล์ซับไปโฟลเดอร์ที่เขียนได้") from e
 
 
 def _has_libass(ffmpeg):
@@ -375,7 +408,7 @@ def _cmd_burn(argv):
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--crf", type=int, default=16)
     a = ap.parse_args(argv)
-    video, ass, out = Path(a.video), Path(a.ass), Path(a.out)
+    video, ass, out = (Path(os.path.abspath(x)) for x in (a.video, a.ass, a.out))   # ffmpeg runs in another folder below
     for f in (video, ass):
         if not f.is_file():
             raise kit.KitError(f"ไม่พบไฟล์: {f}")
@@ -383,9 +416,10 @@ def _cmd_burn(argv):
     if not _has_libass(ffmpeg):
         raise kit.KitError("ffmpeg ตัวนี้ไม่มีตัวฝังซับ (libass) — พิมพ์ \"ตรวจเครื่อง tad-clip\" ให้ Claude ติดตั้ง ffmpeg ตัวเต็มให้")
     out.parent.mkdir(parents=True, exist_ok=True)
-    kit.run([ffmpeg, "-y", "-v", "error", "-i", str(video), "-vf", burn_filter(ass, kit.fonts_dir()),
+    _copy_fonts(ass.parent / "fonts")
+    kit.run([ffmpeg, "-y", "-v", "error", "-i", str(video), "-vf", burn_filter(ass.name),
              "-c:v", "libx264", "-crf", str(a.crf), "-preset", "medium", "-pix_fmt", "yuv420p",
-             "-c:a", "copy", "-movflags", "+faststart", str(out)])
+             "-c:a", "copy", "-movflags", "+faststart", str(out)], cwd=str(ass.parent))
     _say(f"ฝังซับแล้ว → {out}")
     return 0
 

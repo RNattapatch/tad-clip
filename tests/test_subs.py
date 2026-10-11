@@ -868,6 +868,84 @@ def test_missing_asr_module_message(monkeypatch):
     assert "ถอดเสียง" in str(e.value)
 
 
+def _fake_asr(monkeypatch, results):
+    """Replace engine.asr.transcribe; results[k] is what call k returns. -> list of the prompts it was called with."""
+    from engine import asr as real_asr
+    prompts = []
+
+    def fake(path, prompt=None):
+        prompts.append(prompt)
+        return results[min(len(prompts) - 1, len(results) - 1)]
+
+    monkeypatch.setattr(real_asr, "transcribe", fake)
+    return prompts
+
+
+EMPTY = {"transcription": []}
+
+
+def test_empty_prompted_transcription_is_retried_once_without_the_prompt(monkeypatch, capsys):
+    prompts = _fake_asr(monkeypatch, [EMPTY, mini()])
+    out = cli._transcribe(Path("x.wav"), "คำใบ้ของฉัน")
+    assert out == mini()
+    assert prompts == ["คำใบ้ของฉัน", None]
+    assert "ไม่ใส่คำใบ้" in capsys.readouterr().out                    # says so in Thai
+
+
+def test_segments_without_words_count_as_empty(monkeypatch, capsys):
+    hollow = {"transcription": [{"offsets": {"from": 0, "to": 900}, "text": " ",
+                                 "tokens": [{"text": "[_BEG_]", "offsets": {"from": 0, "to": 0}},
+                                            {"text": "  ", "offsets": {"from": 0, "to": 900}}]}]}
+    prompts = _fake_asr(monkeypatch, [hollow, mini()])
+    assert cli._transcribe(Path("x.wav"), "คำใบ้") == mini()
+    assert prompts == ["คำใบ้", None]
+
+
+def test_still_empty_after_the_retry_is_the_existing_thai_error(monkeypatch):
+    prompts = _fake_asr(monkeypatch, [EMPTY, EMPTY])
+    with pytest.raises(kit.KitError) as e:
+        cli._transcribe(Path("x.wav"), "คำใบ้")
+    assert "ไม่ได้ซับเลย" in str(e.value) and "เสียงพูดจริง" in str(e.value)
+    assert prompts == ["คำใบ้", None]                                  # exactly one retry, no more
+
+
+def test_a_good_prompted_transcription_is_not_retried(monkeypatch, capsys):
+    prompts = _fake_asr(monkeypatch, [mini(), EMPTY])
+    assert cli._transcribe(Path("x.wav"), "คำใบ้") == mini()
+    assert prompts == ["คำใบ้"] and "ไม่ใส่คำใบ้" not in capsys.readouterr().out
+
+
+def test_empty_result_without_a_prompt_is_an_error_without_a_retry(monkeypatch):
+    prompts = _fake_asr(monkeypatch, [EMPTY, mini()])
+    with pytest.raises(kit.KitError):
+        cli._transcribe(Path("x.wav"), None)
+    assert prompts == [None]
+
+
+@needs_ffmpeg
+def test_run_recovers_from_an_empty_prompted_transcription(tmp_path, monkeypatch, capsys):
+    video = tmp_path / "คลิป ทดสอบ.mp4"
+    shutil.copy(VIDEO, video)
+    prompts = _fake_asr(monkeypatch, [EMPTY, mini()])
+    out = tmp_path / "ซับ"
+    assert cli.main([str(video), "-o", str(out)]) == 0
+    assert prompts[0] and prompts[1] is None
+    assert len(raw_cues(out)) >= 6 and "ไม่ใส่คำใบ้" in capsys.readouterr().out
+
+
+@needs_ffmpeg
+def test_run_with_no_speech_exits_2_and_leaves_no_asr_json_so_a_rerun_tries_again(tmp_path, monkeypatch, capsys):
+    video = tmp_path / "v.mp4"
+    shutil.copy(VIDEO, video)
+    prompts = _fake_asr(monkeypatch, [EMPTY, EMPTY, mini(), mini()])
+    out = tmp_path / "out"
+    assert cli.main([str(video), "-o", str(out)]) == 2
+    assert "ไม่ได้ซับเลย" in capsys.readouterr().err
+    assert not (out / "asr.json").exists()                              # an empty result is never cached as "done"
+    assert cli.main([str(video), "-o", str(out)]) == 0                  # the next run transcribes again and succeeds
+    assert len(prompts) == 3 and (out / "asr.json").exists()
+
+
 def test_transcribe_wraps_asr_failures_in_thai(monkeypatch):
     from engine import asr as real_asr
 
@@ -1051,9 +1129,45 @@ def test_filter_path_escaping(path, expected):
     assert cli.filter_path(path) == expected
 
 
-def test_burn_filter_names_both_ass_and_fontsdir():
-    flt = cli.burn_filter("/x/y.ass", "/x/fonts")
-    assert flt == "subtitles='/x/y.ass':fontsdir='/x/fonts'"
+def test_burn_filter_uses_a_bare_name_and_a_relative_fonts_folder():
+    flt = cli.burn_filter("คลิป ทดสอบ.karaoke.ass")
+    assert flt == "subtitles='คลิป ทดสอบ.karaoke.ass':fontsdir=fonts"
+    assert "/" not in flt and "\\" not in flt                      # no drive letter, no Thai user-folder path in the filter string
+
+
+def test_burn_runs_ffmpeg_inside_the_ass_folder_with_the_fonts_copied_beside_it(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "_has_libass", lambda ffmpeg: True)
+    monkeypatch.setattr(cli.kit, "run", lambda cmd, **kw: calls.append((list(map(str, cmd)), kw)))
+    kit.save_config({"tools": {"ffmpeg": FFMPEG or sys.executable}})
+    home = tmp_path / "ผู้ใช้ สมชาย ใจดี" / "งาน ซับ"                       # a Thai + space user folder
+    home.mkdir(parents=True)
+    ass = home / "คลิป ทดสอบ.karaoke.ass"
+    ass.write_text("x", encoding="utf-8")
+    (home / "คลิป.mp4").write_bytes(b"x")
+    monkeypatch.chdir(home)                                             # relative video / output paths must survive the cwd change
+    assert cli.main(["burn", "คลิป.mp4", str(ass), "-o", "out/ผลลัพธ์.mp4"]) == 0
+    cmd, kw = calls[-1]
+    assert Path(kw["cwd"]) == home                                      # ffmpeg runs where the .ass lives
+    vf = cmd[cmd.index("-vf") + 1]
+    assert vf == "subtitles='คลิป ทดสอบ.karaoke.ass':fontsdir=fonts"
+    assert Path(cmd[cmd.index("-i") + 1]) == home / "คลิป.mp4" and Path(cmd[cmd.index("-i") + 1]).is_absolute()
+    assert Path(cmd[-1]) == home / "out" / "ผลลัพธ์.mp4" and Path(cmd[-1]).is_absolute()
+    fonts = {f.name for f in (home / "fonts").iterdir()}
+    assert {"Prompt-Regular.ttf", "Prompt-Bold.ttf"} <= fonts          # the bundled fonts, copied next to the .ass
+
+
+def test_burn_copies_only_the_font_files_and_is_repeatable(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_has_libass", lambda ffmpeg: True)
+    monkeypatch.setattr(cli.kit, "run", lambda cmd, **kw: None)
+    kit.save_config({"tools": {"ffmpeg": FFMPEG or sys.executable}})
+    ass = tmp_path / "a.ass"
+    ass.write_text("x", encoding="utf-8")
+    (tmp_path / "v.mp4").write_bytes(b"x")
+    for _ in range(2):
+        assert cli.main(["burn", str(tmp_path / "v.mp4"), str(ass), "-o", str(tmp_path / "o.mp4")]) == 0
+    assert all(f.suffix.lower() in (".ttf", ".otf", ".txt") for f in (tmp_path / "fonts").iterdir())
+    assert len(list((tmp_path / "fonts").glob("Prompt-*.ttf"))) == 4
 
 
 @pytest.mark.skipif(not HAS_LIBASS, reason="ffmpeg without libass")
@@ -1072,6 +1186,7 @@ def test_burn_real_frame_with_awkward_paths(tmp_path):
     out = work / "ผลลัพธ์ ซับ.mp4"
     assert cli.main(["burn", str(clip), str(d / "คลิป สั้น.karaoke.ass"), "-o", str(out)]) == 0
     assert out.exists() and out.stat().st_size > 0
+    assert (d / "fonts" / "Prompt-Bold.ttf").exists()                   # libass read the copy next to the .ass
     probe = subprocess.run([FFMPEG, "-hide_banner", "-i", str(out)], capture_output=True, text=True).stderr
     assert "yuv420p" in probe and "h264" in probe
 
@@ -1132,6 +1247,7 @@ def test_skill_frontmatter_and_required_lines():
     for cmd in ("-m engine.subs", "finalize", "patch", "burn", "edits.schema.json"):
         assert cmd in text
     assert "path ของไฟล์ผู้ใช้ต้องเป็น path เต็ม" in text           # the preamble cd's into the kit
+    assert "`fonts/` ข้างไฟล์ `.ass`" in text and "ถอดซ้ำให้เองโดยไม่ใส่คำใบ้" in text
 
 
 def test_every_skill_bash_block_starts_with_the_shared_preamble():
