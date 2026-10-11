@@ -1,0 +1,292 @@
+{
+  "title": "ลีดเข้าเยอะ แต่เซลล์บอกไม่มีลูกค้า",
+  "source_script": "(ตัวอย่างของ skill · ภาพ AI ทุกช็อตยังไม่มีไฟล์ — ใส่ใน assets/ai/<id>.png หรือเปลี่ยนเป็นภาพจริง)",
+  "style": "diorama",
+  "fps": 30,
+  "out": "out",
+  "shots": [
+    {
+      "id": "01",
+      "t": [
+        0,
+        2.5
+      ],
+      "layout": "split",
+      "say": "ดูแค่ 3 จุดนี้ รู้เลยว่าลีดคุณหายตรงไหน",
+      "visual": {
+        "ai": "leads-pile"
+      },
+      "overlays": [
+        {
+          "type": "hook-pill",
+          "text": "ลีดเข้าเยอะ แต่เซลล์บอก *ไม่มีลูกค้า*",
+          "y": 50
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "t": [
+        2.5,
+        4.5
+      ],
+      "layout": "cutout",
+      "say": "ลีดจากเฟซบุ๊ก",
+      "visual": {
+        "ai": "ch-facebook"
+      },
+      "overlays": [
+        {
+          "type": "label",
+          "text": "Facebook",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "t": [
+        4.5,
+        6.5
+      ],
+      "layout": "cutout",
+      "say": "จาก LINE",
+      "visual": {
+        "ai": "ch-line"
+      },
+      "overlays": [
+        {
+          "type": "label",
+          "text": "LINE OA",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "04",
+      "t": [
+        6.5,
+        8.5
+      ],
+      "layout": "cutout",
+      "say": "โทรเข้ามาเองก็มี",
+      "visual": {
+        "ai": "ch-phone"
+      },
+      "overlays": [
+        {
+          "type": "label",
+          "text": "โทรเข้า",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "05",
+      "t": [
+        8.5,
+        10
+      ],
+      "layout": "full-card",
+      "say": "แล้วมันหายไปไหน",
+      "visual": {
+        "card": {
+          "type": "title",
+          "lines": [
+            "ลีด",
+            "หาย",
+            "ตรงไหน?"
+          ],
+          "accent": 2
+        }
+      }
+    },
+    {
+      "id": "06",
+      "t": [
+        10,
+        12.5
+      ],
+      "layout": "full-speaker",
+      "say": "ส่วนใหญ่ลูกค้าสนใจครับ หายระหว่างทาง 3 จุด",
+      "overlays": [
+        {
+          "type": "label",
+          "text": "หาย 3 จุด",
+          "x": 50,
+          "y": 20,
+          "color": "primary"
+        }
+      ]
+    },
+    {
+      "id": "07",
+      "t": [
+        12.5,
+        16.5
+      ],
+      "layout": "cutout",
+      "say": "หนึ่ง ลีดเข้ามาแล้วไม่มีใครเป็นเจ้าของ ทุกคนนึกว่าอีกคนรับไปแล้ว",
+      "visual": {
+        "ai": "build-1"
+      },
+      "overlays": [
+        {
+          "type": "counter",
+          "n": 1,
+          "of": 3
+        },
+        {
+          "type": "label",
+          "text": "ไม่มีใครเป็นเจ้าของลีด",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "08",
+      "t": [
+        16.5,
+        20.5
+      ],
+      "layout": "cutout",
+      "say": "สอง โทรกลับช้า ลูกค้าทักไปสามเจ้า เจ้าไหนตอบก่อนได้คุยก่อน",
+      "visual": {
+        "ai": "build-2"
+      },
+      "overlays": [
+        {
+          "type": "counter",
+          "n": 2,
+          "of": 3
+        },
+        {
+          "type": "label",
+          "text": "โทรกลับช้าข้ามวัน",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "09",
+      "t": [
+        20.5,
+        24.5
+      ],
+      "layout": "cutout",
+      "say": "สาม คุยแล้วจบแค่ เดี๋ยวส่งข้อมูลให้ ไม่มีวันนัดต่อ",
+      "visual": {
+        "ai": "build-3"
+      },
+      "overlays": [
+        {
+          "type": "counter",
+          "n": 3,
+          "of": 3
+        },
+        {
+          "type": "label",
+          "text": "คุยแล้วไม่มีวันนัดต่อ",
+          "x": 50,
+          "y": 22
+        }
+      ]
+    },
+    {
+      "id": "10",
+      "t": [
+        24.5,
+        29.5
+      ],
+      "layout": "full-card",
+      "say": "เช็คทีมพรุ่งนี้ ลีดทุกตัวต้องมีชื่อคนรับ วันโทร และวันนัดต่อ",
+      "visual": {
+        "card": {
+          "type": "flow",
+          "heading": "ท่อลีดที่ไม่รั่ว",
+          "nodes": [
+            "ลีดเข้า",
+            "มีชื่อคนรับ",
+            "โทรกลับวันนี้",
+            "มีวันนัดต่อ"
+          ],
+          "leaks": [],
+          "hot": [
+            3
+          ],
+          "step": 0.7
+        }
+      }
+    },
+    {
+      "id": "11",
+      "t": [
+        29.5,
+        34.5
+      ],
+      "layout": "proof",
+      "say": "ของผมมี 3 ช่องนี้ในระบบ ลีดไหนช่องว่าง เห็นทันที",
+      "visual": {
+        "proof": "อัดจอระบบที่ใช้จริง คอลัมน์ คนรับ · วันโทร · นัดครั้งต่อไป (ปิดชื่อลูกค้า)"
+      },
+      "overlays": [
+        {
+          "type": "label",
+          "text": "ระบบจริง",
+          "x": 50,
+          "y": 18,
+          "color": "accent2"
+        }
+      ]
+    },
+    {
+      "id": "12",
+      "t": [
+        34.5,
+        39
+      ],
+      "layout": "full-card",
+      "say": "เซฟไว้ แล้วเช็คทีมพรุ่งนี้ครับ",
+      "visual": {
+        "card": {
+          "type": "cta",
+          "big": [
+            "เซฟไว้",
+            "เช็คทีมพรุ่งนี้"
+          ],
+          "small": "ลีดทุกตัว: คนรับ · วันโทร · วันนัดต่อ"
+        }
+      }
+    }
+  ],
+  "prompts": {
+    "leads-pile": {
+      "scene": "A small Thai company sales desk seen from slightly above. A tall messy pile of paper envelopes and sticky notes overflows the desk and spills onto the floor, while two office chairs sit empty and a desk phone lies off the hook."
+    },
+    "ch-facebook": {
+      "scene": "A giant smartphone standing upright like a doorway in a tiny city square, with a steady stream of small paper envelopes flying out of its screen towards the viewer."
+    },
+    "ch-line": {
+      "scene": "A giant smartphone lying flat like a pond, small paper envelopes bubbling up out of the screen and floating upward like balloons."
+    },
+    "ch-phone": {
+      "scene": "An old desk telephone on a small wooden counter with its handset jumping off the cradle, small paper envelopes bursting out around it."
+    },
+    "build-1": {
+      "scene": "A long clear pipe runs from a big inbox tray on the left to a sales desk on the right. Small paper envelopes travel along the pipe. Three tiny sales people stand beside the pipe, each pointing at another person, nobody touching the envelopes."
+    },
+    "build-2": {
+      "edit_of": "build-1",
+      "scene": "Add a large wall clock above the middle of the pipe and make the envelopes pile up and slow down under the clock, with a few envelopes slipping out of a crack in the pipe and falling to the floor."
+    },
+    "build-3": {
+      "edit_of": "build-2",
+      "scene": "At the right end of the pipe, add one sales person holding a phone and smiling, facing a large empty desk calendar with no marks on it; the envelope that reached them drifts away off the edge of the desk."
+    }
+  }
+}

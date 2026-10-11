@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>tad-clip cards</title>
+<style>
+  :root {
+    /* fallback tokens — thv.mjs injects the user's brand (config.brand → engine/kit.mjs brandCss) in a later <style> */
+    --primary: #111827; --primary-deep: #030712; --primary-mid: #1f2937;
+    --accent: #f97316; --accent2: #facc15; --paper: #f5f5f0; --ink: #111111;
+    --green: #00ff00;
+    --hl: var(--accent); --hl-ink: #fff; --ease: cubic-bezier(.16, 1, .3, 1);   /* highlighter = opaque accent bar, words turn white · vox ease-out */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: transparent; }
+  body { font-family: sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }   /* brand font comes from the injected brand CSS */
+
+  /* one frame = 1080x1920 */
+  .frame { position: relative; width: 1080px; height: 1920px; overflow: hidden; }
+  .frame.matte-green { background: var(--green); }
+  .bg-img { position: absolute; inset: 0; background-size: cover; background-position: center; }
+  .bg-img.kb { animation: kb var(--kb-dur, 4s) linear both; }
+  @keyframes kb { from { transform: scale(1); } to { transform: scale(1.08); } }
+  .region { position: absolute; left: 0; width: 1080px; overflow: hidden; }
+  .matte { position: absolute; left: 0; width: 1080px; background: var(--green); }
+
+  /* ---------- overlay cards ---------- */
+  .pill { position: absolute; left: 50%; transform: translate(-50%, -50%); width: max-content; max-width: 960px;
+    background: #fff; color: var(--primary); font-weight: 700; font-size: 60px; line-height: 1.25;
+    padding: 26px 44px; border-radius: 28px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+    animation: pop .35s cubic-bezier(.2,.9,.3,1.3) both; }
+  .pill .acc { color: var(--accent); }
+  .label { position: absolute; transform: translate(-50%, -50%); background: var(--accent); color: #fff;
+    font-weight: 700; font-size: 54px; line-height: 1.2; padding: 16px 34px; border-radius: 20px; white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25); animation: pop .3s cubic-bezier(.2,.9,.3,1.3) both; }
+  .label.primary { background: var(--primary); }
+  .label.accent2 { background: var(--accent2); color: var(--primary-deep); }
+  .counter { position: absolute; top: 300px; right: 60px; background: var(--primary); color: #fff; font-weight: 700;
+    font-size: 48px; padding: 12px 28px; border-radius: 16px; border: 4px solid var(--accent2); animation: pop .3s both; }
+  .counter b { color: var(--accent2); }
+  @keyframes pop { from { opacity: 0; transform: translate(-50%, -50%) scale(.8); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  .counter { animation-name: popc; }
+  @keyframes popc { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: scale(1); } }
+
+  /* chat bubbles (series ฟองแชต: them = เทาชิดซ้าย · me = คอรัลชิดขวา) */
+  .chat { position: absolute; left: 60px; right: 60px; display: flex; flex-direction: column; gap: 26px; }
+  .chat.center { top: 25%; transform: translateY(-50%); }   /* ค่าเริ่มต้น = กลางครึ่งบน (split panel) */
+  .bubble { max-width: 820px; font-size: 56px; line-height: 1.4; font-weight: 600; padding: 22px 34px; border-radius: 36px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.22); animation: rise .32s cubic-bezier(.2,.9,.3,1.2) both; }
+  .bubble.them { align-self: flex-start; background: #ececef; color: var(--ink); border-bottom-left-radius: 10px; }
+  .bubble.me { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 10px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(30px) scale(.9); } to { opacity: 1; transform: none; } }
+
+  /* ---------- full-screen cards ---------- */
+  .full { position: absolute; inset: 0; background: var(--primary); color: #fff; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; padding: 0 70px; text-align: center; }
+  .full.paper { background: var(--paper); color: var(--primary); }
+  /* full-screen cards sit above the subtitle band (karaoke subs ≈ 68–80% of the frame) */
+  .region.tall > .full { padding-bottom: 420px; }
+  /* face slot (plan.face_circle): the speaker's face (circle or real cut-out) at the top of full-screen cards → content sits between the face and the subtitle band */
+  .region.tall.face > .full { padding: 650px 70px 640px; }   /* face circle 400px at y 230 → content between 650 and the subtitle band */
+  .region.face .arrow { height: 40px; margin-bottom: 20px; }
+  .region.face .node { padding: 18px 40px; }
+  .region.face .node { font-size: 52px; }
+  .region.face .title-line[style*="margin-bottom"] { margin-bottom: 24px !important; }   /* flow/compare heading */
+  .region.face .title-line { margin: 4px 0; }
+  .face-slot { position: absolute; left: 340px; top: 230px; width: 400px; height: 400px; border-radius: 50%; background: radial-gradient(circle, #aaa391 72%, transparent 100%); }
+  .title-line { font-weight: 800; line-height: 1.15; animation: slam .38s cubic-bezier(.2,.9,.3,1.2) both; margin: 8px 0; }
+  .title-line.acc { background: #fff; color: var(--accent); padding: 6px 36px 14px; border-radius: 22px; }
+  .full.paper .title-line.acc { background: var(--accent); color: #fff; }
+  @keyframes slam { from { opacity: 0; transform: translateY(40px) scale(1.15); } to { opacity: 1; transform: none; } }
+
+  .cta-big { font-weight: 800; font-size: 120px; line-height: 1.15; color: var(--accent2); animation: slam .4s both; }
+  .cta-small { font-weight: 600; font-size: 54px; line-height: 1.4; margin-top: 36px; animation: fade .4s .35s both; }
+  @keyframes fade { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+
+  .stat-num { font-weight: 800; font-size: 220px; line-height: 1; color: var(--accent2); animation: slam .45s both; }
+  .stat-cap { font-weight: 600; font-size: 56px; line-height: 1.4; margin-top: 30px; animation: fade .4s .3s both; }
+
+  /* flow: vertical chain of nodes, revealed one by one */
+  .flow { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; }
+  .node { width: 760px; background: #fff; color: var(--primary); font-weight: 700; font-size: 60px; line-height: 1.25;
+    padding: 30px 40px; border-radius: 26px; border: 6px solid var(--primary-mid); animation: slam .35s both; }
+  .full.paper .node { border-color: var(--primary); }
+  .node.hot { border-color: var(--accent); color: var(--accent); }
+  .arrow { position: relative; height: 100px; margin-bottom: 26px; width: 8px; background: var(--accent2); animation: grow .3s both; transform-origin: top; }
+  .arrow::after { content: ""; position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
+    border: 22px solid transparent; border-top: 26px solid var(--accent2); border-bottom: 0; }
+  .arrow.leak { background: var(--accent); }
+  .arrow.leak::after { border-top-color: var(--accent); }
+  .leak-tag { position: absolute; left: 44px; top: 50%; transform: translateY(-50%); white-space: nowrap; background: var(--accent);
+    color: #fff; font-weight: 700; font-size: 40px; padding: 8px 22px; border-radius: 14px; animation: fade .3s both; }
+  @keyframes grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+  /* compare: two columns */
+  .cmp { display: flex; gap: 30px; width: 100%; }
+  .col { flex: 1; background: rgba(255,255,255,.06); border-radius: 30px; padding: 44px 30px; text-align: left; }
+  .full.paper .col { background: #fff; }
+  .col h3 { font-size: 72px; font-weight: 800; line-height: 1.2; margin-bottom: 24px; text-align: center; animation: fade .3s both; }
+  .col.bad h3 { color: var(--accent); } .col.good h3 { color: var(--accent2); }
+  .full.paper .col.good h3 { color: var(--primary); }
+  .col li { list-style: none; font-size: 58px; line-height: 1.4; margin: 20px 0; animation: fade .3s both; }
+
+  /* ---------- loose: graphics only on flat green (the editor keys + places them in CapCut) ----------
+     no primary card/panel fill · no AI image · no soft shadows (semi-transparent shadow over green = green fringe after keying)
+     white text that used to sit on the primary colour gets a solid dark stroke so it still reads over any video */
+  .frame.loose { background: var(--green); }
+  .frame.loose .full, .frame.loose .full.paper { background: transparent; color: #fff; }
+  .frame.loose .pill, .frame.loose .label, .frame.loose .bubble, .frame.loose .counter { box-shadow: none; }
+  .frame.loose .title-line:not(.acc), .frame.loose .cta-big, .frame.loose .cta-small, .frame.loose .stat-num, .frame.loose .stat-cap,
+  .frame.loose .col h3, .frame.loose .col li { -webkit-text-stroke: 14px var(--primary-deep); paint-order: stroke fill; }
+  .frame.loose .col { background: var(--primary); }
+
+  /* ---------- look: vox (plan.look = "vox") — references/vox-style.md ----------
+     explainer grammar translated to the user's brand: paper + primary ink + ONE accent per view
+     · accent2 only for numbers · grain lives inside card/image regions only (never over the green matte → keeps chroma key clean)
+     · motion = smooth expo ease-out, no bounce · everything drifts a little for the whole shot (never a dead still) */
+  .look-vox .full { background: var(--paper); color: var(--primary); }
+  .look-vox .full.primary { background: var(--primary); color: var(--paper); }
+  .look-vox .region .full, .look-vox .region .vx-paper { animation: drift var(--shot-dur, 4s) linear both; }
+  @keyframes drift { from { transform: scale(1); } to { transform: scale(1.045); } }
+  .grain { position: absolute; inset: -40px; pointer-events: none; opacity: .14; mix-blend-mode: multiply; z-index: 5;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    animation: boil .5s steps(1) infinite; }
+  .full.primary .grain, .look-vox .full.primary .grain { mix-blend-mode: screen; opacity: .09; filter: invert(1); }
+  @keyframes boil { 0% { transform: translate(0, 0); } 25% { transform: translate(-17px, 9px); } 50% { transform: translate(11px, -14px); } 75% { transform: translate(-6px, -20px); } }
+  .vignette { position: absolute; inset: 0; pointer-events: none; z-index: 4; background: radial-gradient(ellipse at 50% 45%, transparent 55%, color-mix(in srgb, var(--primary-deep) 18%, transparent) 100%); }
+  .vx-paper { position: absolute; inset: 0; background: var(--paper); }
+
+  /* highlighter: swipes left→right behind the text (multi-line spans swipe each line together) */
+  .hl { background-image: linear-gradient(var(--hl), var(--hl)); background-repeat: no-repeat; background-position: 0 58%;
+    background-size: 0% 84%; box-decoration-break: clone; -webkit-box-decoration-break: clone; padding: 0 .14em; margin: 0 -.07em;
+    --ink0: currentColor; animation: swipe .55s cubic-bezier(.33, 0, .2, 1) both; }
+  @keyframes swipe { 0%, 40% { color: var(--ink0); } to { background-size: 100% 84%; color: var(--hl-ink); } }
+  .hl.accent2 { --hl: var(--accent2); --hl-ink: var(--primary-deep); }
+  .full.accent { background: var(--accent) !important; color: #fff; }
+  .full.accent .hl { --hl: var(--primary-deep); --hl-ink: #fff; }
+
+  /* vox entrances replace the bouncy pop */
+  .look-vox .title-line, .look-vox .cta-big, .look-vox .stat-num, .look-vox .node { animation-name: rise-in; animation-timing-function: var(--ease); animation-duration: .6s; }
+  .look-vox .full .title-line.acc { background: none; color: var(--primary); padding: 0; }
+  .look-vox .full.primary .title-line.acc { color: #fff; }
+  .look-vox .label, .look-vox .pill, .look-vox .counter { animation-timing-function: var(--ease); animation-duration: .45s; }
+  .look-vox .label { border-radius: 0; box-shadow: none; }
+  .look-vox .pill { border-radius: 0; box-shadow: none; background: var(--accent); color: #fff; padding: 20px 40px 26px; }
+  .look-vox .pill .acc { color: var(--primary-deep); }
+  /* Shorts chest cards — sit on the speaker's chest (y ≈ 50–68%), never the face, above the subtitle band */
+  .kw { position: absolute; left: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 0; width: max-content; max-width: 980px; z-index: 6; }
+  .kw > div { background: var(--accent); color: #fff; font-weight: 800; line-height: 1.12; padding: 8px 30px 16px; text-align: center; transform-origin: left center;
+    animation: grow-x .28s cubic-bezier(.16, 1, .3, 1) both; }
+  .kw > div > span { display: inline-block; animation: fade-in .2s both; }
+  .namecard { position: absolute; left: 50%; transform: translateX(-50%); background: var(--accent); color: #fff; text-align: center; padding: 18px 46px 24px; min-width: 620px; z-index: 6;
+    transform-origin: left; animation: fade-in .25s both; }
+  .namecard b { display: block; font-size: 58px; font-weight: 800; line-height: 1.2; }
+  .namecard i { display: block; font-style: normal; font-size: 38px; font-weight: 500; line-height: 1.3; opacity: .92; }
+  .docchip { position: absolute; left: 50%; translate: -50% -50%; width: 900px; background: #fff; color: var(--ink); text-align: left; padding: 26px 34px 30px; z-index: 6;
+    animation: rise-in .45s cubic-bezier(.16, 1, .3, 1) both; }
+  .docchip small { display: block; font-size: 26px; font-weight: 700; color: #7b8088; margin-bottom: 10px; }
+  .docchip div { font-size: 48px; font-weight: 800; line-height: 1.3; color: var(--primary-deep); }
+  .look-vox .counter { border-radius: 6px; border-width: 0; background: var(--accent); }
+  .look-vox .counter b { color: #fff; }
+  .look-vox .cta-big { color: var(--primary); }
+  .look-vox .full.primary .cta-big { color: var(--accent2); }
+  .look-vox .stat-num { color: var(--primary); }
+  .look-vox .full.primary .stat-num { color: var(--accent2); }
+  .look-vox .node { border-radius: 8px; border-width: 5px; box-shadow: 0 10px 0 color-mix(in srgb, var(--primary-deep) 12%, transparent); }
+  .look-vox .arrow, .look-vox .arrow::after { background: var(--primary); }
+  .look-vox .arrow::after { background: none; border-top-color: var(--primary); }
+  .look-vox .col { border-radius: 10px; }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(36px); } to { opacity: 1; transform: none; } }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes grow-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+  .source { position: absolute; left: 64px; font-size: 30px; line-height: 1.3; font-weight: 600; color: color-mix(in srgb, var(--primary) 72%, transparent);
+    animation: fade-in .4s both; max-width: 950px; }
+  .source::before { content: "ที่มา · "; color: var(--accent); }
+  .full.primary .source { color: color-mix(in srgb, var(--paper) 75%, transparent); }
+  .full > .source, .full .chart > .source { position: static; margin-top: 44px; text-align: center; animation-delay: .8s; }
+  .source.chip { background: color-mix(in srgb, var(--paper) 92%, transparent); color: var(--primary); padding: 8px 18px; border-radius: 4px; }   /* overlay on footage */
+
+  /* doc — a real document / clipping / message, one line highlighted, camera pushes in */
+  .doc-stage { position: relative; width: 100%; display: flex; justify-content: center; }
+  .doc { position: relative; width: 920px; background: #fff; color: #2a2f36; text-align: left; padding: 64px 60px 70px; transform: rotate(-1.4deg);
+    box-shadow: 0 2px 0 rgba(0, 0, 0, .06), 0 40px 70px -20px color-mix(in srgb, var(--primary-deep) 45%, transparent); animation: doc-in .7s var(--ease, ease-out) both; }
+  .doc-push { width: 920px; margin: 0 auto; animation: push 1.6s .3s cubic-bezier(.45, 0, .25, 1) both; }   /* push lives on a wrapper: scale + rotate on one element drifted the sheet sideways */
+  @keyframes doc-in { from { opacity: 0; transform: rotate(-4deg) translateY(120px); } to { opacity: 1; transform: rotate(-1.4deg); } }
+  @keyframes push { from { transform: scale(1); } to { transform: scale(var(--push, 1.07)); } }
+  .doc.doc-memo { background: #fbf8f1; }
+  .doc.doc-chat { background: #eef1f4; border-radius: 26px; }   /* kinds are namespaced: a bare .chat collides with the chat-bubble overlay */
+  .doc-meta { font-size: 34px; font-weight: 700; color: #8a8f97; border-bottom: 3px solid #e3e0d8; padding-bottom: 22px; margin-bottom: 34px; }
+  .doc-title { font-size: 64px; font-weight: 800; line-height: 1.2; color: var(--primary); margin-bottom: 26px; }
+  .doc p { font-size: 52px; line-height: 1.55; margin: 0 0 18px; }
+  .doc p.dim { color: #a5aab2; }
+  .full > .doc-stage + .source { margin-top: 90px; }
+  .doc-tape { position: absolute; top: -26px; left: 50%; width: 220px; height: 60px; transform: translateX(-50%) rotate(2deg); background: color-mix(in srgb, var(--accent2) 55%, transparent); }
+
+  /* quote — pull quote from a real person (customer / interview) */
+  .q-mark { font-size: 260px; line-height: .6; font-weight: 800; color: var(--accent); height: 130px; animation: fade-in .4s both; }
+  .q-text { font-size: 78px; line-height: 1.38; font-weight: 700; max-width: 920px; animation: rise-in .6s var(--ease, ease-out) both; }
+  .q-who { margin-top: 44px; font-size: 40px; font-weight: 600; opacity: .75; animation: fade-in .4s both; }
+  .q-who::before { content: "— "; }
+
+  /* chapter — section break: big number, title, rule draws across */
+  .ch-n { font-size: 300px; font-weight: 800; line-height: 1; color: transparent; -webkit-text-stroke: 6px var(--primary); animation: rise-in .6s var(--ease, ease-out) both; }
+  .full.primary .ch-n { -webkit-text-stroke-color: var(--paper); }
+  .ch-rule { width: 760px; height: 8px; background: var(--accent); margin: 30px 0 36px; transform-origin: left; animation: grow-x .6s var(--ease, ease-out) both; }
+  .ch-title { font-size: 96px; font-weight: 800; line-height: 1.2; animation: rise-in .6s var(--ease, ease-out) both; }
+  .ch-kicker { font-size: 44px; font-weight: 700; color: var(--accent); margin-bottom: 10px; animation: fade-in .4s both; }
+
+  /* chart — line draws on / bars grow · real data only · source required */
+  .chart-h { font-size: 66px; font-weight: 800; line-height: 1.25; margin-bottom: 18px; max-width: 940px; animation: rise-in .6s var(--ease, ease-out) both; }
+  .chart-sub { font-size: 36px; font-weight: 600; opacity: .7; margin-bottom: 30px; animation: fade-in .4s both; }
+  .chart svg { overflow: visible; display: block; }
+  .chart .grid line { stroke: color-mix(in srgb, var(--primary) 14%, transparent); stroke-width: 2; }
+  .full.primary .chart .grid line { stroke: color-mix(in srgb, var(--paper) 16%, transparent); }
+  .chart .axis { font-family: inherit; font-weight: 600; font-size: 30px; fill: currentColor; opacity: .7; }
+  .chart .ln { fill: none; stroke: var(--primary); stroke-width: 12; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; animation: draw 1.4s var(--ease, ease-out) both; }
+  .full.primary .chart .ln { stroke: var(--paper); }
+  .chart .ln.dim { stroke: color-mix(in srgb, var(--primary) 30%, transparent); stroke-width: 8; }
+  .full.primary .chart .ln.dim { stroke: color-mix(in srgb, var(--paper) 35%, transparent); }
+  .chart .ln.hot { stroke: var(--accent); }
+  .chart .dot { fill: var(--accent); animation: fade-in .25s both; }
+  .chart .bar { fill: color-mix(in srgb, var(--primary) 35%, transparent); transform-box: fill-box; transform-origin: bottom; animation: grow-y .6s var(--ease, ease-out) both; }
+  .full.primary .chart .bar { fill: color-mix(in srgb, var(--paper) 40%, transparent); }
+  .chart .bar.hot { fill: var(--accent); }
+  .chart .val { font-family: inherit; font-weight: 800; font-size: 44px; fill: currentColor; animation: fade-in .3s both; }
+  .chart .val.hot { fill: var(--accent); }
+  .callout { position: absolute; transform: translate(-50%, -100%); background: var(--accent); color: #fff; font-weight: 800; font-size: 44px; line-height: 1.2;
+    padding: 12px 24px; border-radius: 6px; white-space: nowrap; animation: rise-in .45s var(--ease, ease-out) both; }
+  .callout::after { content: ""; position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); border: 16px solid transparent; border-top-color: var(--accent); border-bottom: 0; }
+
+  /* timeline — vertical spine draws down, events land one by one */
+  .tl { position: relative; width: 900px; text-align: left; padding-left: 120px; }
+  .tl-spine { position: absolute; left: 48px; top: 20px; bottom: 20px; width: 8px; background: var(--primary); transform-origin: top; animation: grow-y 1s var(--ease, ease-out) both; }
+  .full.primary .tl-spine { background: var(--paper); }
+  .tl-ev { position: relative; margin: 0 0 56px; animation: rise-in .5s var(--ease, ease-out) both; }
+  .tl-ev::before { content: ""; position: absolute; left: -92px; top: 14px; width: 36px; height: 36px; border-radius: 50%; background: var(--paper); border: 8px solid var(--primary); }
+  .tl-ev.hot::before { background: var(--accent); border-color: var(--accent); }
+  .tl-t { font-size: 44px; font-weight: 800; color: var(--accent); }
+  .tl-x { font-size: 52px; font-weight: 700; line-height: 1.35; }
+
+  /* annotate — hand-drawn circle / underline / arrow / box, draws on (overlay, any layout) */
+  .ann { position: absolute; overflow: visible; pointer-events: none; z-index: 6; }
+  .ann path { fill: none; stroke: var(--accent); stroke-width: 11; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; animation: draw .55s var(--ease, cubic-bezier(.16, 1, .3, 1)) both; }
+  .ann.primary path { stroke: var(--primary); } .ann.paper path { stroke: var(--paper); } .ann.accent2 path { stroke: var(--accent2); }
+  /* highlight overlay — marker swipe over a region of a real screenshot */
+  .hlbox { position: absolute; background: var(--accent); mix-blend-mode: multiply; transform-origin: left; animation: grow-x .5s cubic-bezier(.16, 1, .3, 1) both; z-index: 6; }
+  .hlbox.accent2 { background: color-mix(in srgb, var(--accent2) 60%, transparent); }
+  .matte-green .hlbox, .frame.loose .hlbox { mix-blend-mode: normal; background: var(--accent); height: 14px !important; margin-top: var(--ul-off, 0); border-radius: 7px; }
+
+  /* image treatments (visual.treat) — print = photo laid on paper · duotone = primary/paper archival look */
+  .print { position: absolute; background: #fff; padding: 18px; box-shadow: 0 40px 70px -20px color-mix(in srgb, var(--primary-deep) 50%, transparent); animation: print-in .7s var(--ease, ease-out) both; }
+  .print > div { width: 100%; height: 100%; background-size: cover; background-position: center; animation: kb var(--kb-dur, 4s) linear both; }
+  @keyframes print-in { from { opacity: 0; translate: 0 80px; } to { opacity: 1; translate: 0 0; } }
+  .duo { position: absolute; inset: 0; overflow: hidden; }
+  .duo > .bg-img { filter: grayscale(1) contrast(1.15) brightness(1.04); }
+  .duo::before { content: ""; position: absolute; inset: 0; background: var(--primary); mix-blend-mode: lighten; z-index: 1; }
+  .duo::after { content: ""; position: absolute; inset: 0; background: var(--paper); mix-blend-mode: multiply; z-index: 1; }
+
+  .ov-img { position: absolute; transform: translate(-50%, -50%); animation: ov-in .45s both; }
+  @keyframes ov-in { from { opacity: 0; } to { opacity: 1; } }
+  /* ---------- storyboard ---------- */
+  .board { display: grid; grid-template-columns: repeat(4, 270px); gap: 36px 24px; padding: 40px; background: #e9e7e1; width: max-content; }
+  .board h1 { grid-column: 1 / -1; font-size: 34px; color: var(--primary); }
+  .thumb { width: 270px; }
+  .thumb .box { width: 270px; height: 480px; overflow: hidden; position: relative; border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  .thumb .box .frame { transform: scale(.25); transform-origin: 0 0; }
+  .thumb .cap { font-size: 17px; line-height: 1.4; margin-top: 8px; color: #222; }
+  .thumb .cap b { color: var(--accent); }
+  .ph { position: absolute; display: flex; align-items: center; justify-content: center; text-align: center;
+    font-size: 64px; font-weight: 700; line-height: 1.3; padding: 60px; color: #fff; }
+  .ph.ai { background: repeating-linear-gradient(45deg, #5b6f86, #5b6f86 40px, #52657b 40px, #52657b 80px); }
+  .ph.proof { background: repeating-linear-gradient(45deg, #2e7d5b, #2e7d5b 40px, #29704f 40px, #29704f 80px); }
+  .ph.speaker { background: #c9c4b8; color: #4b4638; }
+  .ph.speaker::before { content: ""; position: absolute; width: 360px; height: 360px; border-radius: 50%; background: #aaa391; top: 22%; }
+  .ph.speaker span { position: relative; margin-top: 55%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// JOB is injected by thv.mjs: { kind: 'frame'|'board', shot?, shots?, title?, matte?, bgImage?, kbDur? }
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const acc = s => esc(s).replace(/\*(.+?)\*/g, '<span class="acc">$1</span>');   // *คำ* = เน้นสีคอรัล
+const lineSize = (lines) => { const w = Math.max(...lines.map(l => l.replace(/[ัิ-ฺ็-๎]/g, '').length));
+  return w <= 5 ? 190 : w <= 8 ? 150 : w <= 11 ? 120 : w <= 15 ? 96 : 78; };
+const delay = (el, s) => { el.style.animationDelay = s + 's'; return el; };
+const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+
+// *คำ* = highlighter swipe (vox) — starts at t, returns html
+const hlText = (s, t, cls = '') => esc(s).replace(/\*(.+?)\*/g, (_, w) => `<span class="hl ${cls}" style="animation-delay:${t}s;animation-duration:${Math.min(1, Math.max(.3, w.length * .035)).toFixed(2)}s">${w}</span>`);   // ~0.1–0.15 s per Thai word
+const VOX = () => document.body.classList.contains('vox');
+// brand tones: primary · paper · accent · accent2 (old plans said navy · coral · gold — same slots)
+const TONE = { navy: 'primary', coral: 'accent', gold: 'accent2' };
+const tone = v => TONE[v] || v;
+const isPrimary = c => VOX() ? tone(c.theme) === 'primary' : tone(c.theme) !== 'paper' && tone(c.theme) !== 'accent';
+const themeOf = c => tone(c.theme) === 'accent' ? ' accent' : isPrimary(c) ? ' primary' : ' paper';
+
+// line chart / bar chart as inline SVG (940 × 760 plot) · real numbers only
+function chartSvg(c, t0) {
+  const Wc = 940, Hc = c.kind === 'bar' ? 700 : 760, pad = { l: 20, r: 40, t: 60, b: 70 };
+  const series = c.series || [], all = series.flatMap(s => s.values), max = c.max ?? Math.max(...all) * 1.08, min = c.min ?? Math.min(0, ...all);
+  const n = Math.max(...series.map(s => s.values.length)), X = i => pad.l + (Wc - pad.l - pad.r) * (n === 1 ? .5 : i / (n - 1)), Y = v => pad.t + (Hc - pad.t - pad.b) * (c.invert ? (v - min) / (max - min) : 1 - (v - min) / (max - min));   // invert: rank charts (P1 on top)
+  let svg = `<svg width="${Wc}" height="${Hc}" viewBox="0 0 ${Wc} ${Hc}"><g class="grid">`;
+  for (let g = 0; g <= 3; g++) { const y = pad.t + (Hc - pad.t - pad.b) * g / 3; svg += `<line x1="0" x2="${Wc}" y1="${y}" y2="${y}"/>`; }
+  svg += '</g>';
+  const xs = c.x || [];
+  if (c.kind === 'bar') {
+    const s = series[0], bw = (Wc - pad.l - pad.r) / s.values.length * .62, step = (Wc - pad.l - pad.r) / s.values.length;
+    s.values.forEach((v, i) => { const x = pad.l + step * i + (step - bw) / 2, y = Y(v), hot = (c.hot || []).includes(i), d = t0 + .2 + i * .18;
+      svg += `<rect class="bar${hot ? ' hot' : ''}" x="${x}" y="${y}" width="${bw}" height="${Y(min) - y}" style="animation-delay:${d}s"/>`;
+      svg += `<text class="val${hot ? ' hot' : ''}" x="${x + bw / 2}" y="${y - 18}" text-anchor="middle" style="animation-delay:${d + .45}s">${esc((c.fmt || '{v}').replace('{v}', v))}</text>`;
+      if (xs[i] != null) svg += `<text class="axis" x="${x + bw / 2}" y="${Hc - 18}" text-anchor="middle">${esc(xs[i])}</text>`; });
+  } else {
+    series.forEach((s, k) => { const pts = s.values.map((v, i) => `${X(i)},${Y(v)}`).join(' L'), d = t0 + .2 + k * .5, cls = s.hot ? ' hot' : series.length > 1 ? ' dim' : '';
+      svg += `<path class="ln${cls}" pathLength="1" d="M${pts}" style="animation-delay:${d}s"/>`;
+      const li = s.values.length - 1; svg += `<circle class="dot" cx="${X(li)}" cy="${Y(s.values[li])}" r="16" style="animation-delay:${d + 1.3}s"/>`; });
+    if (xs.length) { svg += `<text class="axis" x="${X(0)}" y="${Hc - 18}" text-anchor="start">${esc(xs[0])}</text>`;
+      svg += `<text class="axis" x="${X(n - 1)}" y="${Hc - 18}" text-anchor="end">${esc(xs[xs.length - 1])}</text>`; }
+  }
+  return { svg: svg + '</svg>', X, Y, Wc };
+}
+
+// full-screen card types
+function fullCard(c) {
+  const f = h('div', 'full' + themeOf(c));
+  const t0 = c.delay || 0;
+  if (c.type === 'title') {
+    const size = lineSize(c.lines.map(l => l.replace(/\*/g, '')));
+    c.lines.forEach((l, i) => { const t = t0 + i * .22, acc = i === c.accent;
+      const e = h('div', 'title-line' + (acc ? ' acc' : ''), VOX() ? hlText(acc && !/\*/.test(l) ? `*${l}*` : l, t + .35) : esc(l.replace(/\*/g, '')));
+      e.style.fontSize = size + 'px'; f.appendChild(delay(e, t)); });
+  } else if (c.type === 'cta') {
+    const cs = Math.min(120, lineSize((c.big || []).map(l => l.replace(/\*/g, ''))));   // long lines shrink instead of breaking mid-word
+    (c.big || []).forEach((l, i) => { const e = h('div', 'cta-big', VOX() ? hlText(l, t0 + i * .2 + .4) : esc(l.replace(/\*/g, ''))); e.style.fontSize = cs + 'px'; f.appendChild(delay(e, t0 + i * .2)); });
+    if (c.small) f.appendChild(h('div', 'cta-small', esc(c.small)));
+  } else if (c.type === 'stat') {
+    f.appendChild(delay(h('div', 'stat-num', esc(c.value)), t0));
+    f.appendChild(h('div', 'stat-cap', VOX() ? hlText(c.caption || '', t0 + .7) : esc(c.caption || '')));
+  } else if (c.type === 'doc') {   // real document / message / clipping · *phrase* gets the highlighter, then the camera pushes in
+    const stage = h('div', 'doc-stage'), d = h('div', 'doc' + (c.kind ? ' doc-' + c.kind : ''));
+    if (c.tape) d.appendChild(h('div', 'doc-tape'));
+    if (c.meta) d.appendChild(h('div', 'doc-meta', esc(c.meta)));
+    if (c.title) d.appendChild(h('div', 'doc-title', esc(c.title)));
+    const hi = (c.lines || []).findIndex(l => /\*/.test(l));
+    (c.lines || []).forEach((l, i) => d.appendChild(h('p', hi >= 0 && i !== hi && c.dim !== false ? 'dim' : '', hlText(l, t0 + 1.35))));   // swipe .55s → ends at t0+1.9 = push end
+    const pw = h('div', 'doc-push'); pw.style.transformOrigin = `50% ${hi >= 0 ? Math.round(((hi + .5) / c.lines.length) * 80 + 15) : 50}%`;   // push toward the highlighted line
+    if (c.push != null) pw.style.setProperty('--push', c.push);
+    d.style.animationDelay = `${t0}s`; pw.style.animationDelay = `${t0 + .3}s`;
+    pw.appendChild(d); stage.appendChild(pw); f.appendChild(stage);
+  } else if (c.type === 'quote') {
+    f.appendChild(delay(h('div', 'q-mark', '“'), t0));
+    f.appendChild(delay(h('div', 'q-text', hlText(c.text, t0 + .8)), t0 + .15));
+    if (c.who) f.appendChild(delay(h('div', 'q-who', esc(c.who)), t0 + .6));
+  } else if (c.type === 'chapter') {
+    if (c.kicker) f.appendChild(delay(h('div', 'ch-kicker', esc(c.kicker)), t0));
+    f.appendChild(delay(h('div', 'ch-n', esc(c.n)), t0 + .05));
+    f.appendChild(delay(h('div', 'ch-rule'), t0 + .35));
+    f.appendChild(delay(h('div', 'ch-title', hlText(c.title, t0 + .9)), t0 + .5));
+  } else if (c.type === 'chart') {
+    const box = h('div', 'chart'); box.style.position = 'relative';
+    if (c.heading) box.appendChild(delay(h('div', 'chart-h', hlText(c.heading, t0 + .5)), t0));
+    if (c.sub) box.appendChild(delay(h('div', 'chart-sub', esc(c.sub)), t0 + .2));
+    const { svg, X, Y } = chartSvg(c, t0 + .3), plot = h('div', null, svg); plot.style.position = 'relative'; box.appendChild(plot);
+    if (c.callout) { const s = c.series[c.callout.series || 0], i = c.callout.at ?? s.values.length - 1;
+      const k = c.kind === 'bar' ? null : 1; const step = (940 - 60) / s.values.length;
+      const x = c.kind === 'bar' ? 20 + step * i + step / 2 : X(i), y = (c.kind === 'bar' ? Y(s.values[i]) - 70 : Y(s.values[i]) - 34);
+      const co = h('div', 'callout', esc(c.callout.text)); co.style.left = Math.min(Math.max(x, 200), 740) + 'px'; co.style.top = y + 'px'; plot.appendChild(delay(co, t0 + (k ? 1.9 : 1.3))); }
+    f.appendChild(box);
+  } else if (c.type === 'timeline') {
+    const tl = h('div', 'tl'); tl.appendChild(delay(h('div', 'tl-spine'), t0));
+    (c.events || []).forEach((ev, i) => { const e = h('div', 'tl-ev' + ((c.hot || []).includes(i) ? ' hot' : ''), `<div class="tl-t">${esc(ev.t)}</div><div class="tl-x">${hlText(ev.text, t0 + .5 + i * (c.step || .55) + .4)}</div>`);
+      tl.appendChild(delay(e, t0 + .3 + i * (c.step || .55))); });
+    if (c.heading) { const hd = h('div', 'title-line', hlText(c.heading, t0 + .4)); hd.style.fontSize = '84px'; hd.style.marginBottom = '70px'; f.appendChild(delay(hd, t0)); }
+    f.appendChild(tl);
+  } else if (c.type === 'flow') {
+    const wrap = h('div', 'flow'); const reveal = c.reveal ?? c.nodes.length; let t = t0;
+    c.nodes.slice(0, reveal).forEach((n, i) => {
+      if (i > 0) { const leak = (c.leaks || []).includes(i - 1);
+        const a = delay(h('div', 'arrow' + (leak ? ' leak' : '')), t); if (leak) a.appendChild(delay(h('div', 'leak-tag', esc(c.leakText || 'หลุดตรงนี้')), t + .25));
+        wrap.appendChild(a); t += .3; }
+      wrap.appendChild(delay(h('div', 'node' + ((c.hot || []).includes(i) ? ' hot' : ''), esc(n)), t)); t += (c.step || .5);
+    });
+    if (c.heading) { const hd = h('div', 'title-line', esc(c.heading)); hd.style.fontSize = '84px'; hd.style.marginBottom = '50px'; f.appendChild(delay(hd, 0)); }
+    f.appendChild(wrap);
+  } else if (c.type === 'compare') {
+    const cmp = h('div', 'cmp'); let t = t0;
+    [['bad', c.left], ['good', c.right]].forEach(([k, side]) => {
+      const col = h('div', 'col ' + k); col.appendChild(delay(h('h3', null, esc(side.title)), t)); const ul = h('ul');
+      side.items.forEach((it, j) => ul.appendChild(delay(h('li', null, (k === 'bad' ? '✕ ' : '✓ ') + esc(it)), t + .3 + j * .35)));
+      col.appendChild(ul); cmp.appendChild(col); t += .3 + side.items.length * .35;
+    });
+    if (c.heading) { const hd = h('div', 'title-line', esc(c.heading)); hd.style.fontSize = '80px'; hd.style.marginBottom = '50px'; f.appendChild(delay(hd, 0)); }
+    f.appendChild(cmp);
+  }
+  if (c.source && ['stat', 'chart', 'doc', 'quote', 'timeline'].includes(c.type)) f.appendChild(h('div', 'source', esc(c.source)));   // vox rule: every number / document on screen shows where it came from
+  return f;
+}
+const FULL = new Set(['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline']);
+
+// hand-drawn marks in a w×h box (px) — slightly irregular so they read as drawn, not vector-perfect
+function annPath(shape, w, h, from, to) {
+  if (shape === 'circle') { let d = ''; const cx = w / 2, cy = h / 2, N = 64, end = Math.PI * 2 + .55;
+    for (let i = 0; i <= N; i++) { const a = -2.4 + end * i / N, k = 1 + .045 * Math.sin(a * 3 + 1) + .02 * (i / N);
+      d += (i ? ' L' : 'M') + (cx + Math.cos(a) * w / 2 * k).toFixed(1) + ',' + (cy + Math.sin(a) * h / 2 * k).toFixed(1); } return [d]; }
+  if (shape === 'underline') return [`M${w * .01},${h * .55} C${w * .3},${h * .35} ${w * .62},${h * .7} ${w * .99},${h * .42}`];
+  if (shape === 'box') return [`M${w * .02},${h * .04} L${w * .985},${h * .0} L${w},${h * .97} L${w * .01},${h} Z`];
+  if (shape === 'arrow') { const [x1, y1] = from, [x2, y2] = to, mx = (x1 + x2) / 2 + (y2 - y1) * .18, my = (y1 + y2) / 2 - (x2 - x1) * .18;
+    const ang = Math.atan2(y2 - my, x2 - mx), L = 56, a1 = ang + 2.6, a2 = ang - 2.6;
+    return [`M${x1},${y1} Q${mx},${my} ${x2},${y2}`, `M${x2 + Math.cos(a1) * L},${y2 + Math.sin(a1) * L} L${x2},${y2} L${x2 + Math.cos(a2) * L},${y2 + Math.sin(a2) * L}`]; }
+  return [];
+}
+
+// overlay card types (positioned on top of a background / the speaker)
+function overlay(c) {
+  const t = c.delay || 0;
+  if (c.type === 'hook-pill') { const e = h('div', 'pill', acc(c.text)); e.style.top = (c.y ?? 50) + '%'; return delay(e, t); }
+  if (c.type === 'label') { const e = h('div', 'label' + (c.color ? ' ' + tone(c.color) : ''), acc(c.text)); e.style.left = (c.x ?? 50) + '%'; e.style.top = (c.y ?? 30) + '%'; return delay(e, t); }
+  if (c.type === 'chat') { const box = h('div', 'chat' + (c.y == null ? ' center' : '')); if (c.y != null) box.style.top = c.y + '%';
+    c.messages.forEach((m, i) => box.appendChild(delay(h('div', 'bubble ' + (m.side === 'me' ? 'me' : 'them'), esc(m.text)), t + i * (c.step || .6)))); return box; }
+  if (c.type === 'image') { const e = h('img', 'ov-img'); e.src = c.src; e.style.width = (c.w ?? 900) + 'px'; e.style.left = (c.x ?? 50) + '%'; e.style.top = (c.y ?? 25) + '%'; if (c.pop) e.style.animationName = 'pop'; return delay(e, t); }   // series logo / sticker (transparent PNG) · pop: true = scale-in like a meme sticker
+  if (c.type === 'counter') return delay(h('div', 'counter', `<b>${c.n}</b>/${c.of}`), t);
+  if (c.type === 'annotate') {   // x y w h in % of the frame (arrow: from [x,y] → to [x,y] in %)
+    const P = v => v / 100;
+    if (c.shape === 'arrow') { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'ann' + (c.color ? ' ' + tone(c.color) : '')); Object.assign(svg.style, { left: 0, top: 0, width: '1080px', height: '1920px' });
+      annPath('arrow', 0, 0, [P(c.from[0]) * 1080, P(c.from[1]) * 1920], [P(c.to[0]) * 1080, P(c.to[1]) * 1920]).forEach((d, i) =>
+        svg.insertAdjacentHTML('beforeend', `<path pathLength="1" d="${d}" style="animation-delay:${t + i * .45}s"/>`)); return svg; }
+    const w = P(c.w ?? 40) * 1080, hh = P(c.h ?? 8) * 1920, svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'ann' + (c.color ? ' ' + tone(c.color) : '')); svg.setAttribute('viewBox', `0 0 ${w} ${hh}`);
+    Object.assign(svg.style, { left: (P(c.x ?? 50) * 1080 - w / 2) + 'px', top: (P(c.y ?? 50) * 1920 - hh / 2) + 'px', width: w + 'px', height: hh + 'px' });
+    annPath(c.shape || 'circle', w, hh).forEach(d => svg.insertAdjacentHTML('beforeend', `<path pathLength="1" d="${d}" style="animation-delay:${t}s"/>`)); return svg; }
+  if (c.type === 'highlight') { const e = h('div', 'hlbox' + (tone(c.color) === 'accent2' ? ' accent2' : ''));
+    Object.assign(e.style, { left: (c.x - (c.w ?? 40) / 2) + '%', top: (c.y - (c.h ?? 3) / 2) + '%', width: (c.w ?? 40) + '%', height: (c.h ?? 3) + '%' });
+    e.style.setProperty('--ul-off', ((c.h ?? 3) * 19.2) + 'px'); return delay(e, t); }
+  if (c.type === 'keyword') {   // Shorts definition card: one accent box per line, boxes grow first, words land 0.15 s apart
+    const box = h('div', 'kw'); box.style.top = (c.y ?? 56) + '%'; const size = Math.min(c.size || 999, lineSize(c.lines.map(l => l.replace(/\*/g, ''))) * .82);
+    c.lines.forEach((l, i) => { const row = h('div'); row.style.fontSize = Math.round(size) + 'px'; row.style.animationDelay = (t + i * .15) + 's';
+      const sp = h('span', null, esc(l.replace(/\*/g, ''))); sp.style.animationDelay = (t + i * .15 + .18) + 's'; row.appendChild(sp); box.appendChild(row); });
+    return box; }
+  if (c.type === 'name') { const e = h('div', 'namecard', `<b>${esc(c.name)}</b>${c.role ? `<i>${esc(c.role)}</i>` : ''}`); e.style.top = (c.y ?? 52) + '%'; return delay(e, t); }
+  if (c.type === 'docchip') { const e = h('div', 'docchip', `${c.meta ? `<small>${esc(c.meta)}</small>` : ''}<div>${hlText(c.text, t + .5)}</div>`); e.style.top = (c.y ?? 56) + '%'; return delay(e, t); }
+  if (c.type === 'source') { const e = h('div', 'source chip', esc(c.text)); e.style.top = (c.y ?? 14) + '%'; return delay(e, t + .3); }
+  return null;
+}
+
+// layout = which part of the frame shows the speaker (filled with matte green in 'green' renders)
+const SPEAKER_ZONE = { split: [960, 960], cutout: null, 'full-speaker': [0, 1920], 'full-card': null, proof: null };   // thv.mjs renames legacy layouts before they get here
+const who = () => esc((window.JOB && window.JOB.speaker) || 'ผู้พูด');
+
+function buildFrame(shot, opts) {
+  if (opts.loose) {   // graphics only, no background / speaker zone — same positions as the full render
+    const fr = h('div', 'frame loose' + (opts.look === 'vox' ? ' look-vox' : ''));
+    if (opts.matte === 'none') fr.style.background = 'transparent';   // --matte alpha / still PNG
+    const c = shot.visual && shot.visual.card;
+    if (c && FULL.has(c.type)) { const region = h('div', 'region' + (shot.layout === 'split' ? '' : ' tall') + (opts.faceSlot && shot.face !== false && shot.layout === 'full-card' ? ' face' : '')); region.style.top = 0; region.style.height = (shot.layout === 'split' ? 960 : 1920) + 'px'; region.appendChild(fullCard(c)); fr.appendChild(region); }
+    (shot.overlays || []).forEach(o => { const e = overlay(o); if (e) fr.appendChild(e); });
+    return fr;
+  }
+  const vox = opts.look === 'vox', v0 = shot.visual || {};
+  const fr = h('div', 'frame' + (vox ? ' look-vox' : '')); const layout = shot.layout;
+  fr.style.setProperty('--shot-dur', ((shot.t[1] - shot.t[0]) || 4) + 's');
+  const top = layout === 'split' ? 960 : 1920;
+  // background visual region
+  if (layout !== 'full-speaker') {
+    const region = h('div', 'region' + (top === 1920 ? ' tall' : '') + (opts.faceSlot && shot.face !== false && layout === 'full-card' ? ' face' : '')); region.style.top = 0; region.style.height = top + 'px';
+    if (opts.bgImage && v0.treat === 'print') {   // photo laid on paper: white border, slight tilt, drifts
+      region.appendChild(h('div', 'vx-paper')); const pr = h('div', 'print'), im = h('div');
+      Object.assign(pr.style, top === 960 ? { left: '110px', top: '90px', width: '860px', height: '780px' } : layout === 'cutout' ? { left: '90px', top: '300px', width: '900px', height: '960px' } : { left: '90px', top: '330px', width: '900px', height: '1100px' });
+      pr.style.rotate = (v0.tilt ?? -1.5) + 'deg'; im.style.backgroundImage = `url("${opts.bgImage}")`; if (opts.kbDur) im.style.setProperty('--kb-dur', opts.kbDur + 's');
+      pr.appendChild(im); region.appendChild(pr); }
+    else if (opts.bgImage) { const b = h('div', 'bg-img' + (opts.kb ? ' kb' : '')); b.style.backgroundImage = `url("${opts.bgImage}")`; if (opts.kbDur) b.style.setProperty('--kb-dur', opts.kbDur + 's');
+      if (v0.treat === 'duotone') { const d = h('div', 'duo'); d.appendChild(b); region.appendChild(d); } else region.appendChild(b); }
+    else if (opts.placeholder) { const v = shot.visual || {}; const kind = (v.proof || v.footage) ? 'proof' : v.ai ? 'ai' : (v.card || v.panel) ? '' : 'ai';
+      if (kind) { const p = h('div', 'ph ' + kind, esc(v.footage ? 'คลิปจริง: ' + (v.footage.label || v.footage.file) : v.proof ? 'ของจริง: ' + v.proof : 'AI: ' + (v.ai || '?'))); p.style.inset = 0; region.appendChild(p); } }
+    if (shot.visual && shot.visual.panel) { const pn = h('div', 'full' + (['paper', 'accent'].includes(tone(shot.visual.panel)) ? ' ' + tone(shot.visual.panel) : ' primary')); region.appendChild(pn); }   // plain panel for chat / labels
+    if (shot.visual && shot.visual.card && FULL.has(shot.visual.card.type)) region.appendChild(fullCard(shot.visual.card));
+    // vox texture: grain + vignette only inside graphic regions (cards · panels · treated images) — never over the speaker / the green matte
+    if (vox && (v0.card || v0.panel || (v0.treat && opts.bgImage))) { region.appendChild(h('div', 'vignette')); region.appendChild(h('div', 'grain')); }
+    fr.appendChild(region);
+  }
+  // speaker zone
+  const zone = SPEAKER_ZONE[layout];
+  if (zone) {
+    if (opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()}</span>`); p.style.left = 0; p.style.width = '1080px'; p.style.top = zone[0] + 'px'; p.style.height = zone[1] + 'px'; fr.appendChild(p); }
+    else if (opts.matte === 'green') { const m = h('div', 'matte'); m.style.top = zone[0] + 'px'; m.style.height = zone[1] + 'px'; fr.appendChild(m); }
+  }
+  if (layout === 'full-card' && opts.placeholder && opts.faceSlot && shot.face !== false) fr.appendChild(h('div', 'face-slot'));
+  if (layout === 'cutout' && opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()} (ตัดพื้น)</span>`); Object.assign(p.style, { left: '240px', width: '600px', top: '1260px', height: '660px', borderRadius: '300px 300px 0 0', opacity: .92 }); fr.appendChild(p); }
+  (shot.overlays || []).forEach(c => { const e = overlay(c); if (e) fr.appendChild(e); });
+  // overlay-only render on a full-speaker / proof shot: matte the whole frame so CapCut keys it out
+  if (opts.matte === 'green' && !opts.bgImage && !(shot.visual && (shot.visual.card || shot.visual.panel)) && layout !== 'split') fr.classList.add('matte-green');
+  return fr;
+}
+
+function render(job) {
+  const root = document.getElementById('root');
+  if (job.kind === 'board') {
+    const b = h('div', 'board'); b.appendChild(h('h1', null, esc(job.title || 'Storyboard')));
+    job.shots.forEach(s => { const th = h('div', 'thumb'); const box = h('div', 'box'); box.appendChild(buildFrame(s, { placeholder: true, bgImage: s._bg, look: job.look, faceSlot: job.faceSlot }));
+      th.appendChild(box); th.appendChild(h('div', 'cap', `<b>${esc(s.id)}</b> · ${s.t[0]}–${s.t[1]} วิ · ${esc(s.layout)}${s.beat ? ' · <b>' + esc(s.beat) + '</b>' : ''}<br>${esc((s.say || '').slice(0, 70))}`)); b.appendChild(th); });
+    root.appendChild(b);
+  } else root.appendChild(buildFrame(job.shot, job));
+}
+if (window.JOB && window.JOB.look === 'vox') document.body.classList.add('vox');
+
+// deterministic seek for frame-by-frame capture (ms)
+window.__seek = (ms) => { document.getAnimations().forEach(a => { a.pause(); a.currentTime = ms; });
+  return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); };
+window.__lastEnd = () => Math.max(0, ...document.getAnimations().map(a => { const t = a.effect.getComputedTiming(); return t.endTime; }));
+render(window.JOB);
+</script>
+</body>
+</html>
