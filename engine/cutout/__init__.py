@@ -201,6 +201,20 @@ def _vision(src: Path, out: Path, info: dict) -> None:
 
 # ---------------------------------------------------------------- tb (transparent-background)
 
+TB_CACHE_KEYS = ("TRANSPARENT_BACKGROUND_FILE_PATH", "TORCH_HOME", "HF_HOME")
+
+
+def tb_env() -> dict:
+    """Environment for transparent-background: the same model/cache folders `setup --with-cutout` downloaded into
+    (engine.install.setup.kit_dirs — weights in <home>/.transparent-background, torch + Hugging Face under <home>/cache),
+    so a run never fetches a second copy outside the kit home. Folders are created if missing."""
+    from engine.install.setup import kit_dirs   # one source of truth for those paths; imported late (setup is big)
+    dirs = {k: v for k, v in kit_dirs().items() if k in TB_CACHE_KEYS}
+    for d in dirs.values():
+        Path(d).mkdir(parents=True, exist_ok=True)
+    return {**os.environ, **dirs, "PYTORCH_ENABLE_MPS_FALLBACK": "1", "PYTHONUTF8": "1"}
+
+
 def tb_device(py: str) -> str:
     """cuda if available, else mps on a Mac, else cpu."""
     return kit.run([py, "-c", TB_DEVICE]).stdout.strip().splitlines()[-1]
@@ -215,8 +229,7 @@ def _tb(src: Path, out: Path, info: dict, work: Path) -> None:
     plain = work / "src.mp4"
     if src != plain:
         shutil.copyfile(src, plain)
-    env = {**os.environ, "PYTORCH_ENABLE_MPS_FALLBACK": "1", "PYTHONUTF8": "1"}
-    kit.run([py, "-c", TB_MAIN, "--source", "src.mp4", "--dest", ".", "--type", "map", "--device", dev], cwd=str(work), env=env)
+    kit.run([py, "-c", TB_MAIN, "--source", "src.mp4", "--dest", ".", "--type", "map", "--device", dev], cwd=str(work), env=tb_env())
     maps = sorted(work.glob("src_map.*"))
     if not maps:
         raise KitError("transparent-background ไม่ได้สร้างไฟล์ matte (src_map.*)")

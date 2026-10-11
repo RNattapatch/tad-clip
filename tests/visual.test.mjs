@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const THV = join(ROOT, 'engine', 'visual', 'thv.mjs');
@@ -96,16 +97,16 @@ test('legacy names still load: old full-speaker name, navy/coral/gold → primar
 });
 
 // ---------------------------------------------------------------- presets
-test('output preset: 1080p follows the source fps (capped at 60) · 2k60 = 1440x2560 @ 60 with 1080 cards', () => {
+test('output preset: 1080p = source fps capped at 30 · 2k60 = 1440x2560 @ 60 with 1080 cards', () => {
   const dir = workDir();
   const src = relative(dir, FIXTURE);
   const base = { title: 't', proof_exempt: 'x', source_video: src, shots: [{ id: '01', t: [0, 2], layout: 'full-speaker' }] };
   let ctx = withHome({ output: { preset: '1080p' } }, () => thv.load(writePlan(dir, base)));
-  assert.equal(ctx.preset, '1080p'); assert.equal(ctx.fps, 60); assert.equal(ctx.renderScale, 1);   // fixture is 60 fps
+  assert.equal(ctx.preset, '1080p'); assert.equal(ctx.fps, 30); assert.equal(ctx.renderScale, 1);   // fixture is 60 fps → 30 for a phone post
   ctx = withHome({ output: { preset: '2k60' } }, () => thv.load(writePlan(dir, base)));
   assert.equal(ctx.preset, '2k60'); assert.equal(ctx.fps, 60); assert.ok(Math.abs(ctx.renderScale - 4 / 3) < 1e-9); assert.equal(ctx.cardScale, 1);
-  ctx = thv.load(writePlan(dir, { ...base, preset: '1080p', fps: 30 }));
-  assert.equal(ctx.fps, 30);                                                                            // plan wins
+  ctx = thv.load(writePlan(dir, { ...base, preset: '1080p', fps: 60 }));
+  assert.equal(ctx.fps, 60);                                                                            // plan wins
   ctx = thv.load(writePlan(dir, { ...base, source_video: undefined, preset: '1080p' }));
   assert.equal(ctx.fps, 30);                                                                            // nothing to follow yet
 });
@@ -211,6 +212,129 @@ test('Edge / full Chrome get --headless=new, chrome-headless-shell gets --headle
   assert.ok(shell.includes('--remote-debugging-pipe') && !shell.some(a => a.startsWith('--remote-debugging-port')));
 });
 
+// ---------------------------------------------------------------- dogfood round (D18 · D19 · D22)
+test('check warns on overlay collisions: overlay vs overlay and overlay vs the subtitle band (warnings only)', () => {
+  const dir = workDir();
+  const f = writePlan(dir, { title: 't', proof_exempt: 'x', shots: [
+    { id: '01', t: [0, 3], layout: 'split', visual: { panel: 'primary' }, overlays: [
+      { type: 'chat', messages: [{ side: 'me', text: 'เรื่องนี้ผมรับไว้เองครับ' }, { side: 'me', text: 'ผมจะรีบส่งทีมไปตรวจให้' }, { side: 'them', text: 'โอเคครับ' }] },
+      { type: 'label', text: 'โทรหาเขาก่อน 4 โมง', x: 50, y: 22 }] },
+    { id: '02', t: [3, 6], layout: 'full-speaker', overlays: [{ type: 'label', text: 'ป้ายต่ำเกินไป', x: 50, y: 71 }] },
+    { id: '03', t: [6, 9], layout: 'full-speaker', overlays: [{ type: 'label', text: 'ป้ายเหนือหัว', x: 50, y: 16 }, { type: 'source', text: 'ที่มาทดสอบ', y: 24 }] }] });
+  thv.load(f);
+  const r = thv.check();
+  assert.equal(r.ok, true, r.errs.join('\n'));
+  assert.ok(r.warns.some(w => /shot 01/.test(w) && /label/.test(w) && /chat/.test(w) && /ทับกัน/.test(w)), r.warns.join('\n'));
+  assert.ok(r.warns.some(w => /shot 02/.test(w) && /แถบซับ/.test(w)), r.warns.join('\n'));
+  assert.ok(!r.warns.some(w => /shot 03/.test(w) && /ทับ/.test(w)), 'false alarm on a clean shot: ' + r.warns.filter(w => /shot 03/.test(w)).join(' | '));
+});
+
+test('visual.footage.source is drawn as the same source chip the source overlay draws', async t => {
+  const dir = workDir();
+  mkdirSync(join(dir, 'assets', 'footage'), { recursive: true });
+  const foot = join(dir, 'assets', 'footage', 'สต็อก มืด.mp4');
+  const g = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x202020:s=1080x1920:r=30', '-t', '3', '-pix_fmt', 'yuv420p', foot]);
+  assert.equal(g.status, 0, String(g.stderr));
+  const plan = writePlan(dir, { title: 't', source_video: relative(dir, FIXTURE), fps: 30, shots: [
+    { id: '01', t: [0, 2], layout: 'split', visual: { footage: { file: 'assets/footage/สต็อก มืด.mp4', start: 0, source: 'ภาพจำลอง · ทดสอบ' } } }] });
+  for (const cmd of ['motion', 'compose']) { const r = node([cmd, plan]); assert.equal(r.status, 0, r.stdout + r.stderr); }
+  const chip = rgbMean(join(dir, 'out', 'preview-composite.mp4'), 1, [70, 278, 40, 24]);   // overlay `source` default spot: x 64 px, y 14 %
+  const beside = rgbMean(join(dir, 'out', 'preview-composite.mp4'), 1, [700, 278, 40, 24]);
+  assert.ok(chip.every(c => c > 150), `no source chip drawn: ${chip.map(Math.round)}`);
+  assert.ok(beside.every(c => c < 60), `footage not under the chip: ${beside.map(Math.round)}`);
+});
+
+test('storyboard shows the real speaker frame and the subtitle band (no grey placeholder) · says why a shot has no PNG', () => {
+  const dir = workDir(); mkdirSync(join(dir, 'ซับ'));
+  writeFileSync(join(dir, 'ซับ', 'คลิป.karaoke.ass'), [
+    '[Script Info]', 'PlayResX: 720', 'PlayResY: 1280', '', '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    'Style: Default,Prompt,60,&H00507FFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,2,2,40,40,340,1', '',
+    '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+    'Dialogue: 0,0:00:00.10,0:00:02.90,Default,,0,0,0,,{\\k40}ซับ{\\k60}ทดสอบ{\\k80}ยาวยาว', ''].join('\n'));
+  const shots = [{ id: '01', t: [0, 3], layout: 'full-speaker', say: 'พูด' }];
+  const board = (name, extra) => {
+    const f = writePlan(dir, { title: 't', proof_exempt: 'x', out: name, shots, ...extra }, name + '.json');
+    const r = node(['all', f]); assert.equal(r.status, 0, r.stdout + r.stderr); return r;
+  };
+  const noSrc = board('a', {}), withSrc = board('b', { source_video: relative(dir, FIXTURE) }), withSubs = board('c', { source_video: relative(dir, FIXTURE), subs: 'ซับ/คลิป.karaoke.ass' });
+  assert.match(withSrc.stdout, /ไม่มีกราฟิก/);   // full-speaker with nothing on it → no PNG, and the log says so
+  const thumb = n => rgbMean(join(dir, n, 'storyboard.png'), 0, [60, 140, 230, 440]);
+  const crop = (n, [x, y, w, h]) => spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-i', join(dir, n, 'storyboard.png'), '-vf', `crop=${w}:${h}:${x}:${y},format=gray`, '-f', 'rawvideo', '-'], { maxBuffer: 1 << 26 }).stdout;
+  const diff = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]); return d / a.length; };
+  const ph = thumb('a');
+  assert.ok(Math.abs(ph[0] - 201) < 12 && Math.abs(ph[2] - 184) < 12, `placeholder expected without source (${ph.map(Math.round)})`);
+  assert.ok(diff(crop('a', [60, 140, 230, 440]), crop('b', [60, 140, 230, 440])) > 15, 'storyboard still shows the grey placeholder');
+  const bd = diff(crop('b', [45, 440, 260, 60]), crop('c', [45, 440, 260, 60]));   // thumb box top ≈127 px + 73 % of 480
+  assert.ok(bd > 2, `subtitle band not drawn on the storyboard (${bd.toFixed(2)})`);
+});
+
+test('retiming a shot re-grabs its storyboard stills (speaker + footage), keyed by timestamp', () => {
+  const dir = workDir(); mkdirSync(join(dir, 'assets', 'footage'), { recursive: true });
+  const foot = join(dir, 'assets', 'footage', 'นับเวลา.mp4');   // testsrc: every second looks different
+  const g = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=1080x1920:rate=30', '-t', '12', '-pix_fmt', 'yuv420p', foot]);
+  assert.equal(g.status, 0, String(g.stderr));
+  const shots = cut => [
+    { id: '01', t: [0, cut], layout: 'full-speaker', overlays: [{ type: 'label', text: 'ป้าย', y: 20 }] },
+    { id: '02', t: [cut, 12], layout: 'split', visual: { footage: { file: 'assets/footage/นับเวลา.mp4', start: 0, source: 'ภาพจำลอง · ทดสอบ' } } }];
+  const md5 = f => createHash('md5').update(readFileSync(f)).digest('hex');
+  const stills = () => readdirSync(join(dir, 'out', 'stills')).sort();
+  const run = cut => { const r = node(['board', writePlan(dir, { title: 't', proof_exempt: 'x', source_video: relative(dir, FIXTURE), shots: shots(cut) })]); assert.equal(r.status, 0, r.stdout + r.stderr); return stills(); };
+  const first = run(4), second = run(9);
+  const pick = (list, re) => list.filter(n => re.test(n));
+  const spk1 = pick(first, /^01-speaker/), spk2 = pick(second, /^01-speaker/), ft1 = pick(first, /^02-footage/), ft2 = pick(second, /^02-footage/);
+  assert.equal(spk1.length, 1); assert.equal(spk2.length, 1, `old speaker still kept beside the new one: ${spk2}`);
+  assert.notEqual(spk1[0], spk2[0], 'speaker still not re-keyed after retiming');
+  assert.equal(ft2.length, 1, `old footage still kept: ${ft2}`);
+  assert.notEqual(ft1[0], ft2[0], 'footage still not re-keyed after retiming');
+  const again = run(9);
+  assert.deepEqual(again, second, 'same timing must reuse the cached stills');
+});
+
+test('board removes a shot\'s old-style stills (<id>.jpg · <id>-speaker.jpg) when it writes the new-style ones', () => {
+  const dir = workDir(), st = join(dir, 'out', 'stills'); mkdirSync(join(dir, 'assets', 'footage'), { recursive: true }); mkdirSync(st, { recursive: true });
+  const g = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=1080x1920:rate=30', '-t', '4', '-pix_fmt', 'yuv420p', join(dir, 'assets', 'footage', 'ภาพ.mp4')]);
+  assert.equal(g.status, 0, String(g.stderr));
+  const legacy = ['01.jpg', '01-speaker.jpg', '02.jpg', '02-speaker.jpg'], other = ['เก็บไว้.jpg', '010.jpg'];   // older kits: footage = <id>.jpg · speaker = <id>-speaker.jpg
+  [...legacy, ...other].forEach(n => writeFileSync(join(st, n), 'old'));
+  const r = node(['board', writePlan(dir, { title: 't', proof_exempt: 'x', source_video: relative(dir, FIXTURE), shots: [
+    { id: '01', t: [0, 3], layout: 'full-speaker', overlays: [{ type: 'label', text: 'ป้าย', y: 20 }] },
+    { id: '02', t: [3, 6], layout: 'split', visual: { footage: { file: 'assets/footage/ภาพ.mp4', start: 0, source: 'ภาพจำลอง · ทดสอบ' } } }] })]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const now = readdirSync(st);
+  for (const n of legacy) assert.ok(!now.includes(n), `old-style still left behind: ${n} (in ${now})`);
+  for (const n of other) assert.ok(now.includes(n), `removed a file that is not this shot's old still: ${n}`);
+  for (const re of [/^01-speaker-[0-9a-f]{6}-\d+\.jpg$/, /^02-speaker-[0-9a-f]{6}-\d+\.jpg$/, /^02-footage-[0-9a-f]{6}-\d+\.jpg$/])
+    assert.ok(now.some(n => re.test(n)), `new-style still missing: ${re} (in ${now})`);
+});
+
+test('vox graphics_fps default gives even holds: 12 at 24/48/60 fps · 15 at 30 · 12.5 at 25/50 · explicit value wins', () => {
+  const dir = workDir();
+  const at = (fps, extra = {}) => thv.load(writePlan(dir, { title: 't', look: 'vox', fps, shots: [{ id: '01', t: [0, 2], layout: 'full-speaker' }], ...extra })).graphicsFps;
+  assert.equal(at(60), 12); assert.equal(at(30), 15); assert.equal(at(24), 12); assert.equal(at(25), 12.5); assert.equal(at(50), 12.5); assert.equal(at(48), 12);
+  for (const fps of [24, 25, 30, 48, 50, 60]) assert.equal(fps % at(fps), 0, `${fps} fps: uneven holds`);
+  assert.equal(at(30, { graphics_fps: 12 }), 12);
+  assert.equal(at(30, { graphics_fps: 0 }), 0);
+  assert.equal(thv.load(writePlan(dir, { title: 't', fps: 30, shots: [{ id: '01', t: [0, 2], layout: 'full-speaker' }] })).graphicsFps, 0, 'non-vox stays smooth');
+});
+
+test('vox graphics clock holds every graphics frame for exactly fps/graphics_fps output frames (10 s, the clock motion uses)', () => {
+  const summary = runs => { const c = {}; runs.forEach(n => { c[n] = (c[n] || 0) + 1; }); return JSON.stringify(c); };
+  for (const [fps, step] of [[30, 15], [60, 12], [24, 12], [25, 12.5], [50, 12.5], [48, 12]]) {
+    const runs = thv.holds(fps, step, 10), want = fps / step;
+    assert.equal(runs.reduce((a, b) => a + b, 0), fps * 10, `${fps}/${step}: frame count`);
+    assert.ok(runs.every(n => n === want), `${fps} fps / graphics ${step}: holds ${summary(runs)}, want all ${want}`);
+  }
+  // the defaults load() picks go through the same clock
+  const dir = workDir();
+  for (const fps of [24, 25, 30, 48, 50, 60]) {
+    const step = thv.load(writePlan(dir, { title: 't', look: 'vox', fps, shots: [{ id: '01', t: [0, 2], layout: 'full-speaker' }] })).graphicsFps;
+    const runs = thv.holds(fps, step, 10);
+    assert.ok(runs.every(n => n === fps / step), `${fps} fps default (${step}): holds ${summary(runs)}`);
+  }
+  assert.deepEqual(thv.holds(30, 0, 1), Array(30).fill(1), 'graphics_fps 0 = every output frame is new');
+});
+
 // ---------------------------------------------------------------- the skill users run
 test('SKILL.md: clean code fences · every bash block sources env.sh · no bare tools · no dev-only knobs', () => {
   const md = readFileSync(join(ROOT, 'skills', 'tad-clip-visual', 'SKILL.md'), 'utf8').split('\n');
@@ -234,6 +358,30 @@ test('SKILL.md: clean code fences · every bash block sources env.sh · no bare 
   const text = md.join('\n');
   assert.doesNotMatch(text, /TAD_CLIP_TB_PYTHON/, 'dev-only env var in user-facing text');
   assert.doesNotMatch(text, /ytsearch\d+:/, 'raw yt-dlp search — use python -m engine.fetch ytsearch');
+  // long commands: every block that runs motion/compose/subs/all/animatic/loose tells Claude to background it
+  md.forEach((l, i) => { if (/thv\.mjs (motion|compose|subs|all|animatic|loose)\b|-m engine\.cutout/.test(l) && !/check/.test(l)) {
+    const near = md.slice(Math.max(0, i - 8), i + 3).join('\n');
+    assert.match(near, /run_in_background/, `line ${i + 1}: long command without run_in_background guidance`); } });
+  // block comments agree with the top rule: background OR a 600000 ms timeout
+  md.filter(l => /^\s*#.*run_in_background/.test(l)).forEach(l => assert.match(l, /600000/, `block comment lacks the timeout alternative: ${l.trim().slice(0, 60)}`));
+  // several long thv commands in one block are chained with && so a failed step stops the rest
+  let blk = null;
+  md.forEach(l => { const t = l.trim();
+    if (t === '```bash') blk = []; else if (t === '```') { if (blk) { const cmds = blk.filter(x => /thv\.mjs (motion|compose|subs)\b/.test(x));
+      cmds.slice(1).forEach(x => assert.match(x, /^&&/, `not chained with &&: ${x.slice(0, 60)}`)); } blk = null; } else if (blk) blk.push(t); });
+  // a runnable long thv command written in prose escapes the && rule above (two separate background calls can overlap) → bash block only
+  let inFence = false;
+  md.forEach((l, i) => { if (l.trim().startsWith('```')) { inFence = !inFence; return; }
+    if (!inFence) assert.doesNotMatch(l, /"\$NODE" engine\/visual\/thv\.mjs (motion|compose|subs|all|animatic|loose)\b/, `line ${i + 1}: long thv command in prose — put it in a bash block chained with &&`); });
+  // the vox graphics_fps default depends on the output fps (thv load(): 15 at 30 · 12 at 24/48/60 · 12.5 at 25/50)
+  const gfps = md.find(l => /^\|[^|]*`graphics_fps`/.test(l)) || '';
+  assert.match(gfps, /15[^|]*30/, `graphics_fps row must give 15 at 30 fps: ${gfps.slice(0, 120)}`);
+  assert.match(gfps, /12\.5[^|]*25\/50/, `graphics_fps row must give 12.5 at 25/50 fps: ${gfps.slice(0, 120)}`);
+  assert.match(gfps, /12[^|.]*24\/48\/60/, `graphics_fps row must give 12 at 24/48/60 fps: ${gfps.slice(0, 120)}`);
+  assert.match(text, /กึ่งกลาง/, 'highlight/annotate x,y = box centre must be stated');
+  assert.match(text, /สต็อก[^\n]*ภาพจำลอง|ภาพจำลอง[^\n]*สต็อก/, 'stock footage standing in for the event gets a ภาพจำลอง chip');
+  assert.match(text, /compose[^\n]*ทั้งคลิป/, 'compose renders the whole clip — time expectations');
+  for (const field of ['`source`', '`highlight`', '`treat`', '`keyword`']) assert.ok(text.includes(field), `${field} documented in the skill itself`);
 });
 
 // ---------------------------------------------------------------- real render against the fixture

@@ -146,6 +146,39 @@ def test_chatty_matte_tool_does_not_deadlock(tmp_path, monkeypatch):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_tb_runs_with_the_kit_model_caches(tmp_path, monkeypatch):
+    """setup pre-downloads transparent-background weights + torch/HF caches into the kit home — the tb run must use them,
+    not download a second copy outside ~/.tad-clip."""
+    from engine.install import setup
+    monkeypatch.setenv("TAD_CLIP_HOME", str(tmp_path / "บ้าน kit"))
+    monkeypatch.delenv("TAD_CLIP_TB_PYTHON", raising=False)
+    monkeypatch.setattr(cutout, "tb_python", lambda: "tb-python")
+    monkeypatch.setattr(cutout, "tb_installed", lambda *a: True)
+    monkeypatch.setattr(cutout, "tb_device", lambda *a, **k: "cpu")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        if cutout.TB_MAIN in cmd:
+            (Path(kw["cwd"]) / "src_map.mp4").write_bytes(b"map")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(cutout.kit, "run", fake_run)
+    work = tmp_path / "งาน"
+    work.mkdir()
+    (work / "src.mp4").write_bytes(b"clip")
+    cutout._tb(work / "src.mp4", tmp_path / "out.webm", {"avg_frame_rate": "30/1"}, work)
+
+    env = next(kw["env"] for cmd, kw in calls if cutout.TB_MAIN in cmd)
+    want = setup.kit_dirs()
+    home = kit.home()
+    for key in ("TRANSPARENT_BACKGROUND_FILE_PATH", "TORCH_HOME", "HF_HOME"):
+        assert env[key] == want[key], key                       # exactly the paths setup downloaded into
+        assert Path(env[key]).is_dir(), key                     # created if missing
+        assert Path(env[key]).is_relative_to(home), key         # nothing outside the kit home
+    assert env["PYTORCH_ENABLE_MPS_FALLBACK"] == "1"
+
+
 def test_tb_device_order(monkeypatch):
     seen = {}
 

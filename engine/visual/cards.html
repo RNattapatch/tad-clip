@@ -276,6 +276,11 @@
   .ph.speaker { background: #c9c4b8; color: #4b4638; }
   .ph.speaker::before { content: ""; position: absolute; width: 360px; height: 360px; border-radius: 50%; background: #aaa391; top: 22%; }
   .ph.speaker span { position: relative; margin-top: 55%; }
+  /* storyboard with a real frame of the speaker (thv board: one still at the shot's midpoint) + the subtitle band */
+  .spk { position: absolute; background-repeat: no-repeat; }
+  .spk-tag { position: absolute; left: 50%; bottom: 40px; translate: -50% 0; background: rgba(0, 0, 0, .65); color: #fff; font-size: 44px; font-weight: 700; padding: 6px 22px; border-radius: 10px; white-space: nowrap; }
+  .sb-sub { position: absolute; left: 60px; right: 60px; z-index: 9; text-align: center; color: #fff; font-weight: 700; line-height: 1.2;
+    -webkit-text-stroke: 10px #000; paint-order: stroke fill; }
 </style>
 </head>
 <body>
@@ -446,6 +451,9 @@ function overlay(c) {
   return null;
 }
 
+// storyboard: the speaker's real frame (shot._spk = 1080×1920 still) cropped/placed the way compose does it
+const spkDiv = (s, [x, y, w, hh], size, pos, extra = {}) => { const d = h('div', 'spk');
+  Object.assign(d.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: hh + 'px', backgroundImage: `url("${s._spk}")`, backgroundSize: size, backgroundPosition: pos, ...extra }); return d; };
 // layout = which part of the frame shows the speaker (filled with matte green in 'green' renders)
 const SPEAKER_ZONE = { split: [960, 960], cutout: null, 'full-speaker': [0, 1920], 'full-card': null, proof: null };   // thv.mjs renames legacy layouts before they get here
 const who = () => esc((window.JOB && window.JOB.speaker) || 'ผู้พูด');
@@ -484,12 +492,30 @@ function buildFrame(shot, opts) {
   // speaker zone
   const zone = SPEAKER_ZONE[layout];
   if (zone) {
-    if (opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()}</span>`); p.style.left = 0; p.style.width = '1080px'; p.style.top = zone[0] + 'px'; p.style.height = zone[1] + 'px'; fr.appendChild(p); }
+    if (opts.placeholder && shot._spk && layout === 'split') {   // split_window [y, h]: h ≤ 960 = 1:1 crop · h > 960 = fit (compose blurs the sides)
+      const [wy, wh] = shot._win || [260, 960], k = wh <= 960 ? 1 : 960 / wh;
+      fr.appendChild(spkDiv(shot, [0, 960, 1080, 960], `${1080 * k}px ${1920 * k}px`, `${(1080 - 1080 * k) / 2}px ${-wy * k}px`, { backgroundColor: '#2a2a2a' })); }
+    else if (opts.placeholder && shot._spk) fr.appendChild(spkDiv(shot, [0, 0, 1080, 1920], '1080px 1920px', '0 0'));
+    else if (opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()}</span>`); p.style.left = 0; p.style.width = '1080px'; p.style.top = zone[0] + 'px'; p.style.height = zone[1] + 'px'; fr.appendChild(p); }
     else if (opts.matte === 'green') { const m = h('div', 'matte'); m.style.top = zone[0] + 'px'; m.style.height = zone[1] + 'px'; fr.appendChild(m); }
   }
-  if (layout === 'full-card' && opts.placeholder && opts.faceSlot && shot.face !== false) fr.appendChild(h('div', 'face-slot'));
-  if (layout === 'cutout' && opts.placeholder) { const p = h('div', 'ph speaker', `<span>${who()} (ตัดพื้น)</span>`); Object.assign(p.style, { left: '240px', width: '600px', top: '1260px', height: '660px', borderRadius: '300px 300px 0 0', opacity: .92 }); fr.appendChild(p); }
+  if (layout === 'full-card' && opts.placeholder && opts.faceSlot && shot.face !== false) {
+    if (shot._spk && shot._face) {   // face_circle.window [x, y, side] of the speaker frame → size S at card_y (circle, or a cut-out bust that fades at the bottom)
+      const F = shot._face, [fx, fy, side] = F.window, S = F.size, k = S / side, fade = 'linear-gradient(to bottom, #000 78%, transparent)';
+      fr.appendChild(spkDiv(shot, [(1080 - S) / 2, F.card_y, S, S], `${1080 * k}px ${1920 * k}px`, `${-fx * k}px ${-fy * k}px`,
+        (F.mode || 'cutout') === 'circle' ? { borderRadius: '50%' } : { WebkitMaskImage: fade, maskImage: fade })); }
+    else fr.appendChild(h('div', 'face-slot'));
+  }
+  if (layout === 'cutout' && opts.placeholder) {
+    if (shot._spk) {   // compose scales the whole frame to cutout_scale, bottom-centre, and cuts the background away
+      const cw = Math.round(1080 * (shot._cut || .62)), ch = Math.round(1920 * (shot._cut || .62));
+      const d = spkDiv(shot, [(1080 - cw) / 2, 1920 - ch, cw, ch], `${cw}px ${ch}px`, '0 0', { outline: '6px dashed rgba(255, 255, 255, .85)', outlineOffset: '-6px' });
+      d.appendChild(h('span', 'spk-tag', 'ตัดพื้นตอน compose')); fr.appendChild(d); }
+    else { const p = h('div', 'ph speaker', `<span>${who()} (ตัดพื้น)</span>`); Object.assign(p.style, { left: '240px', width: '600px', top: '1260px', height: '660px', borderRadius: '300px 300px 0 0', opacity: .92 }); fr.appendChild(p); }
+  }
   (shot.overlays || []).forEach(c => { const e = overlay(c); if (e) fr.appendChild(e); });
+  if (opts.placeholder && shot._sub) {   // storyboard: the subtitle line at this shot's midpoint, where `subs` will burn it
+    const sb = h('div', 'sb-sub', esc(shot._sub.text)); sb.style.bottom = (1920 - shot._sub.base) + 'px'; sb.style.fontSize = shot._sub.size + 'px'; fr.appendChild(sb); }
   // overlay-only render on a full-speaker / proof shot: matte the whole frame so CapCut keys it out
   if (opts.matte === 'green' && !opts.bgImage && !(shot.visual && (shot.visual.card || shot.visual.panel)) && layout !== 'split') fr.classList.add('matte-green');
   return fr;
