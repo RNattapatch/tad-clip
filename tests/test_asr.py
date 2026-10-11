@@ -252,6 +252,75 @@ def test_cuda_failure_on_first_inference_reloads_on_cpu(media, monkeypatch, isol
     assert "CPU" in capsys.readouterr().err
 
 
+GPU_VALUE_ERROR = "Requested float16 compute type, but the target device or backend do not support efficient float16 computation."
+
+
+def test_value_error_at_load_on_cuda_falls_back_to_cpu_int8(monkeypatch, isolated_home, capsys):
+    import faster_whisper
+    _cuda(monkeypatch, 1)
+    built = []
+
+    def maybe(name, **kw):
+        built.append((kw["device"], kw["compute_type"], kw["local_files_only"]))
+        if kw["device"] == "cuda":
+            raise ValueError(GPU_VALUE_ERROR)
+        return RecorderModel(name, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", maybe)
+    m = asr.load_model()
+    assert (m.kw["device"], m.kw["compute_type"]) == ("cpu", "int8")
+    assert built == [("cuda", "float16", True), ("cpu", "int8", True)]     # no pointless download attempt in between
+    assert "CUDA" in capsys.readouterr().err
+
+
+def test_value_error_on_first_inference_on_cuda_reloads_on_cpu(media, monkeypatch, isolated_home, capsys):
+    import faster_whisper
+    _cuda(monkeypatch, 1)
+    RecorderModel.instances = []
+    good = FakeModel()
+
+    class Old(RecorderModel):
+        def transcribe(self, audio, **kw):
+            if self.kw["device"] == "cuda":
+                raise ValueError(GPU_VALUE_ERROR)
+            return good.transcribe(audio, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Old)
+    assert_ojf_schema(asr.transcribe(media))
+    assert [i.kw["device"] for i in RecorderModel.instances] == ["cuda", "cpu"]
+    assert "CPU" in capsys.readouterr().err
+
+
+def test_invalid_model_name_is_not_blamed_on_the_gpu(monkeypatch, isolated_home, capsys):
+    import faster_whisper
+    _cuda(monkeypatch, 1)
+    seen = []
+
+    def bad(name, **kw):
+        seen.append(kw["device"])
+        raise ValueError("Invalid model size 'nonsense', expected one of: tiny, base")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", bad)
+    with pytest.raises(kit.KitError) as e:
+        asr.load_model("nonsense")
+    assert seen == ["cuda"] and "nonsense" in str(e.value)               # no cpu retry, no CUDA notice
+    assert "CUDA" not in capsys.readouterr().err
+
+
+def test_value_error_on_cpu_is_a_thai_error(media, monkeypatch, isolated_home):
+    import faster_whisper
+    _cuda(monkeypatch, 0)
+
+    class Odd(RecorderModel):
+        def transcribe(self, audio, **kw):
+            raise ValueError("bad audio shape")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Odd)
+    with pytest.raises(kit.KitError) as e:
+        asr.transcribe(media)
+    assert "bad audio shape" in str(e.value)
+
+
 def test_runtime_error_on_cpu_is_a_thai_error_not_a_traceback(media, monkeypatch, isolated_home):
     import faster_whisper
     _cuda(monkeypatch, 0)
@@ -469,6 +538,13 @@ def test_normalizer_drops_special_tokens_and_whisper_extras():
     d = asr.normalize_cpp(raw)
     assert d == {"transcription": [{"offsets": {"from": 0, "to": 500}, "text": "สวัสดี",
                                     "tokens": [{"text": "สวัสดี", "offsets": {"from": 0, "to": 300}}]}]}
+
+
+@pytest.mark.parametrize("special", ["[_BEG_]", "[_TT_150", "[_", "[_weird thing]", "[_SOT_]x", "[_not_closed"])
+def test_normalizer_drops_every_token_that_starts_with_bracket_underscore(special):
+    raw = cpp_json([((0, 500), [(special, 0, 0), ("สวัสดี", 0, 300), (special, 300, 300)])])
+    (seg,) = asr.normalize_cpp(raw)["transcription"]
+    assert [t["text"] for t in seg["tokens"]] == ["สวัสดี"] and seg["text"] == "สวัสดี"
 
 
 def test_normalizer_carries_a_split_character_into_the_next_segment():

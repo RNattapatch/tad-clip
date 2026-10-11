@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import urllib.error
@@ -16,6 +17,11 @@ from pathlib import Path
 from engine import kit
 from engine import install as inst
 
+# BtbN builds have libass. The master nightly hung ffmpeg in an audio mix (digital silence + limiter) on windows-latest
+# 2026-10-11 while the n8.1 release-branch build of the same day passed → use the oldest release branch BtbN still
+# builds (most mature, always ≥ 5.1), the pinned n8.1 when the GitHub API is unreachable, master only as a last resort.
+BTBN_RELEASE_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
+FFMPEG_RELEASE_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip"
 FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 NODE_INDEX_URL = "https://nodejs.org/dist/index.json"
 UV_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
@@ -97,14 +103,40 @@ def pick_node(index: list) -> tuple:
     raise kit.KitError(f"หา Node {inst.NODE_MIN} สำหรับ Windows ใน nodejs.org ไม่เจอ — ลองติดตั้งใหม่อีกครั้งภายหลัง")
 
 
+def ffmpeg_urls() -> list:
+    """Download candidates in order: oldest maintained release branch (from the API), pinned n8.1, master."""
+    urls = []
+    try:
+        rel = []
+        for a in _fetch_json(BTBN_RELEASE_API).get("assets", []):
+            m = re.fullmatch(r"ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-\1\.\2\.zip", a.get("name", ""))
+            if m:
+                rel.append(((int(m.group(1)), int(m.group(2))), a["browser_download_url"]))
+        urls += [u for _, u in sorted(rel)[:1]]
+    except (OSError, ValueError, KeyError):
+        pass   # API unreachable or rate-limited → the pinned build
+    out = []
+    for u in urls + [FFMPEG_RELEASE_URL, FFMPEG_URL]:
+        if u not in out:
+            out.append(u)
+    return out
+
+
 def ensure_ffmpeg() -> tuple:
     b = bin_dir()
     ff, fp = b / "ffmpeg.exe", b / "ffprobe.exe"
     if ff.exists() and fp.exists() and inst.has_libass(str(ff)):
         print(f"  ✓ ffmpeg มีอยู่แล้ว ({ff})", flush=True)
         return str(ff), str(fp)
-    _from_zip(FFMPEG_URL, "ffmpeg (ไฟล์ zip ~200 MB)", {"ffmpeg.exe": ff, "ffprobe.exe": fp})
-    return str(ff), str(fp)
+    last = None
+    for url in ffmpeg_urls():
+        try:
+            _from_zip(url, "ffmpeg (ไฟล์ zip ~200 MB)", {"ffmpeg.exe": ff, "ffprobe.exe": fp})
+            return str(ff), str(fp)
+        except kit.KitError as e:
+            last = e
+            print(f"  ⚠️ {e} — ลองชุดถัดไป", flush=True)
+    raise last
 
 
 def ensure_node() -> str:

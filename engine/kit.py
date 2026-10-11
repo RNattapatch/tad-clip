@@ -20,7 +20,7 @@ DEFAULTS = {
     "brand": {"preset": "neutral", "font": "Prompt", "colors": {}},
     "subtitle": {"highlight": "#FF7F50", "size": 60, "margin_v": 340, "max_chars": 22},
     "output": {"preset": "1080p", "safe_zone": "tiktok"},
-    "whisper": {"model": "large-v3", "device": "auto", "compute_type": "auto"},
+    "whisper": {"model": "large-v3", "backend": "auto", "device": "auto", "compute_type": "auto"},
     "library_dir": None,
     "glossary": {"fixes": [], "glue": [], "protect": [], "prompt_hint": ""},
     "cutout": {"engine": "auto"},
@@ -124,8 +124,8 @@ def run(cmd: list, **kw) -> subprocess.CompletedProcess:
     kw.setdefault("text", True)
     kw.setdefault("encoding", "utf-8")
     kw.setdefault("errors", "replace")
-    kw.setdefault("stdin", subprocess.DEVNULL)   # ffmpeg on Windows otherwise waits on an inherited stdin pipe
-    kw.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})   # child pythons write what we decode (utf-8)
+    kw.setdefault("stdin", subprocess.DEVNULL)   # PROPOSED: never hand children our stdin
+    kw.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})   # PROPOSED: child pythons write what we decode (utf-8)
     try:
         res = subprocess.run([str(c) for c in cmd], **kw)
     except FileNotFoundError as e:

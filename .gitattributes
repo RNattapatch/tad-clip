@@ -1,5 +1,5 @@
-# LF in every text file on every OS: Windows git (core.autocrlf=true) would check out CRLF,
-# which breaks engine/env.sh in Git Bash ($'\\r': command not found) and every SKILL.md / JSON parser that splits on \\n
+# LF in every text file on every OS. Windows git (core.autocrlf=true) would check out CRLF, which breaks
+# engine/env.sh in Git Bash and every SKILL.md / JSON reader that splits lines on LF.
 * text=auto eol=lf
 *.mp4 binary
 *.wav binary

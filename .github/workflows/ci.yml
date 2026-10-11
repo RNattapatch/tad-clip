@@ -1,7 +1,8 @@
 # Install the kit the way a user does, then unit tests + an end-to-end smoke render, on macOS and Windows.
 # macOS minutes bill at 10× → one job per OS (installer runs once), whisper `base` (whisper.cpp ggml on macOS,
 # faster-whisper on Windows), caches for model + uv,
-# superseded runs cancelled, and only main pushes / manual runs trigger it.
+# superseded runs cancelled, only main pushes / manual runs trigger it, and macOS only runs when asked
+# (manual run, or [mac-ci] in the commit message).
 name: ci
 
 on:
@@ -42,7 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.os == 'macos' && '["macos-14"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-14","windows-latest"]') }}
+        # macOS bills 10×: it runs only on a manual run (Actions → ci → Run workflow, os = both/macos) or when the pushed
+        # head commit message contains [mac-ci]. Every push runs Windows.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.os == 'macos' && '["macos-14"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-14","windows-latest"]') || (contains(github.event.head_commit.message, '[mac-ci]') && '["macos-14","windows-latest"]' || '["windows-latest"]')) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,7 +149,7 @@ jobs:
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
         timeout-minutes: 20
         # a hung test (an ffmpeg that never exits) dumps every thread and ends the run after 5 min instead of eating the job
-        run: '"$PY" -m pytest -v -m "not network" -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true --durations=15 --deselect "tests/test_sfx.py::test_dur_cuts_the_sound_with_a_fade"'   # BRANCH ONLY: known Windows hang, diagnosed below
+        run: '"$PY" -m pytest -v -m "not network" -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true --durations=15'
 
       - name: Unit tests (node)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
@@ -169,21 +172,6 @@ jobs:
           WhisperModel(str(dst), device="cpu", compute_type="int8")
           print("OK: faster-whisper loads a model from", dst)
           EOF
-
-      - name: "BRANCH ONLY diag: the hanging sfx test with BtbN release ffmpeg n8.1 (Windows)"
-        if: ${{ !cancelled() && steps.tools.outcome == 'success' && runner.os == 'Windows' }}
-        continue-on-error: true
-        timeout-minutes: 8
-        run: |
-          D="$RUNNER_TEMP/ff81"; mkdir -p "$D"
-          curl -sSL -o "$D/ff.zip" https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip
-          unzip -q -j "$D/ff.zip" '*/bin/ffmpeg.exe' '*/bin/ffprobe.exe' -d "$D"
-          H2="$RUNNER_TEMP/home81"; mkdir -p "$H2"
-          "$PY" -c "import json,sys; c=json.load(open(sys.argv[1],encoding='utf-8')); c['tools']['ffmpeg']=sys.argv[2]+'/ffmpeg.exe'; c['tools']['ffprobe']=sys.argv[2]+'/ffprobe.exe'; json.dump(c,open(sys.argv[3]+'/config.json','w',encoding='utf-8'))" "$TAD_CLIP_HOME/config.json" "$(cygpath -m "$D")" "$H2"
-          "$D/ffmpeg.exe" -version | head -1
-          TAD_CLIP_HOME="$H2" "$PY" -m pytest -v "tests/test_sfx.py::test_dur_cuts_the_sound_with_a_fade" -o faulthandler_timeout=120 -o faulthandler_exit_on_timeout=true
-          echo "--- same test with the master build (the one setup installs):"
-          "$PY" -m pytest -v "tests/test_sfx.py::test_dur_cuts_the_sound_with_a_fade" -o faulthandler_timeout=120 -o faulthandler_exit_on_timeout=true
 
       - name: Smoke (fixture → final.mp4)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}

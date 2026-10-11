@@ -19,7 +19,6 @@ import codecs
 import functools
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -39,7 +38,6 @@ CPP_NAMES = {"whispercpp", "whisper.cpp", "whisper-cpp", "cpp"}
 FW_NAMES = {"faster-whisper", "fasterwhisper", "faster_whisper", "faster"}
 DTW_PRESETS = {"tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en",
                "large.v1", "large.v2", "large.v3", "large.v3.turbo"}
-_SPECIAL_TOKEN = re.compile(r"\[_[A-Za-z]+_?\d*\]")      # [_BEG_]  [_TT_150]  [_EOT_]
 
 
 def utf8_stdio():
@@ -160,14 +158,14 @@ def _load_cached(name, device, compute, root):
         return WhisperModel(name, local_files_only=True, **kw)
     except FileNotFoundError:   # "not in the local cache" -- the only error that means "go download it"
         pass
-    except RuntimeError:        # CUDA / out of memory / native failure: load_model() decides what to do
+    except (RuntimeError, ValueError):   # CUDA / out of memory / unsupported compute type: load_model() decides
         raise
     except Exception as e:
         raise KitError(f"โหลดโมเดล {name} ไม่ได้ ({type(e).__name__}: {e})") from e
     notice(f"กำลังดาวน์โหลดโมเดล {name} ครั้งแรก (ไฟล์ใหญ่ ใช้เวลาสักพัก) ครั้งต่อไปใช้งานออฟไลน์ได้")
     try:
         return WhisperModel(name, local_files_only=False, **kw)
-    except RuntimeError:
+    except (RuntimeError, ValueError):
         raise
     except OSError as e:        # no network, DNS, HTTP errors
         raise KitError(f"โหลดโมเดล {name} ไม่สำเร็จ — ครั้งแรกต้องต่ออินเทอร์เน็ตเพื่อโหลดโมเดล แล้วสั่งใหม่อีกครั้ง\n"
@@ -183,6 +181,12 @@ def _cuda_fallback(why):
     notice(f"ใช้การ์ดจอ (CUDA) ไม่ได้ ({first}) — สลับไปใช้ CPU แทน (ช้ากว่า แต่ทำงานต่อได้)")
 
 
+def _gpu_trouble(e) -> bool:
+    """A failure the CPU can work around: CUDA/cuDNN/out-of-memory (RuntimeError) or a compute type the card does not
+    support, e.g. float16 on an old GPU (ValueError). A wrong model name is not one of them."""
+    return isinstance(e, RuntimeError) or (isinstance(e, ValueError) and "Invalid model size" not in str(e))
+
+
 def load_model(model=None):
     """The WhisperModel for this machine, loaded once per process (models live in ~/.tad-clip/models).
     A CUDA failure drops to CPU int8 with a notice instead of stopping."""
@@ -190,20 +194,20 @@ def load_model(model=None):
     root = str(kit.models_dir())
     try:
         return _load_cached(name, device, compute, root)
-    except RuntimeError as e:
-        if device != "cuda":
+    except (RuntimeError, ValueError) as e:
+        if device != "cuda" or not _gpu_trouble(e):
             raise KitError(f"โหลดโมเดล {name} ไม่ได้ ({type(e).__name__}: {e})") from e
         _cuda_fallback(e)
         return _load_cached(name, "cpu", "int8", root)
 
 
 def _run_model(fn):
-    """fn(model) with the model from load_model(); a CUDA RuntimeError during inference reloads on the CPU once."""
+    """fn(model) with the model from load_model(); a CUDA failure during inference reloads on the CPU once."""
     model = load_model()
     try:
         return fn(model)
-    except RuntimeError as e:
-        if settings()[1] == "cuda":
+    except (RuntimeError, ValueError) as e:
+        if settings()[1] == "cuda" and _gpu_trouble(e):
             _cuda_fallback(e)
             return fn(load_model())
         raise KitError(f"ถอดเสียงไม่สำเร็จ ({type(e).__name__}: {e})") from e
@@ -217,8 +221,9 @@ def extract_wav(media, wav):
     if not media.is_file():
         raise KitError(f"ไม่พบไฟล์ {media}")
     try:
-        kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-i", media, "-vn", "-ac", "1", "-ar", str(SR),
-                 "-c:a", "pcm_s16le", wav])
+        # first_pts=0: pad the start so sample 0 is container time 0 -- the clock roughcut's phrases and render use
+        kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-i", media, "-vn",
+                 "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", str(SR), "-c:a", "pcm_s16le", wav])
     except KitError as e:
         if "ไม่พบโปรแกรม" in str(e):
             raise
@@ -268,7 +273,7 @@ def normalize_cpp(raw) -> dict:
         tokens = []
         for t in seg.get("tokens") or []:
             text = t.get("text", "")
-            if _SPECIAL_TOKEN.fullmatch(text):
+            if text.startswith("[_"):          # [_BEG_]  [_TT_150]  [_EOT_]: whisper.cpp control tokens (same rule as make_subs)
                 continue
             f, to = int(t["offsets"]["from"]), int(t["offsets"]["to"])
             if start is None:

@@ -44,8 +44,47 @@ def test_pick_node_without_22_is_a_thai_error():
         windows.pick_node([{"version": "v20.1.0", "files": ["win-x64-zip"]}])
 
 
+BTBN_ASSETS = {"assets": [
+    {"name": "ffmpeg-master-latest-win64-gpl.zip", "browser_download_url": "https://x/master.zip"},
+    {"name": "ffmpeg-n9.0-latest-win64-gpl-9.0.zip", "browser_download_url": "https://x/n9.0.zip"},
+    {"name": "ffmpeg-n8.1-latest-win64-gpl-8.1.zip", "browser_download_url": "https://x/n8.1.zip"},
+    {"name": "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip", "browser_download_url": "https://x/shared.zip"},
+    {"name": "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz", "browser_download_url": "https://x/linux.tar.xz"},
+]}
+
+
+def test_ffmpeg_prefers_the_oldest_maintained_release_branch(monkeypatch):
+    """BtbN's master nightly hung ffmpeg in an audio mix on windows-latest (2026-10-11); the n8.1 build passed."""
+    monkeypatch.setattr(windows, "_fetch_json", lambda url: BTBN_ASSETS)
+    assert windows.ffmpeg_urls() == ["https://x/n8.1.zip", windows.FFMPEG_RELEASE_URL, windows.FFMPEG_URL]
+
+
+def test_ffmpeg_urls_without_github_api(monkeypatch):
+    def boom(url):
+        raise OSError("rate limited")
+    monkeypatch.setattr(windows, "_fetch_json", boom)
+    assert windows.ffmpeg_urls() == [windows.FFMPEG_RELEASE_URL, windows.FFMPEG_URL]
+
+
+def test_ffmpeg_falls_back_to_the_next_build_when_a_download_fails(monkeypatch):
+    calls = []
+    monkeypatch.setattr(windows, "ffmpeg_urls", lambda: ["https://x/a.zip", "https://x/b.zip"])
+    monkeypatch.setattr(inst, "has_libass", lambda ff: True)
+
+    def fake_download(url, dest, label=""):
+        calls.append(url)
+        if url.endswith("a.zip"):
+            raise kit.KitError("โหลด a ไม่สำเร็จ")
+        return _zip(Path(dest), ["bin/ffmpeg.exe", "bin/ffprobe.exe"])
+
+    monkeypatch.setattr(windows, "download", fake_download)
+    windows.ensure_ffmpeg()
+    assert calls == ["https://x/a.zip", "https://x/b.zip"]
+
+
 def test_urls_are_the_documented_ones():
     assert windows.FFMPEG_URL == "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    assert windows.FFMPEG_RELEASE_URL == "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip"
     assert windows.NODE_INDEX_URL == "https://nodejs.org/dist/index.json"
     assert windows.UV_URL == "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
     assert windows.YTDLP_URL == "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
@@ -89,9 +128,10 @@ def test_ensure_ffmpeg_downloads_extracts_and_cleans_zip(monkeypatch, tmp_path):
         return _zip(Path(dest), ["x/bin/ffmpeg.exe", "x/bin/ffprobe.exe"])
 
     monkeypatch.setattr(windows, "download", fake_download)
+    monkeypatch.setattr(windows, "ffmpeg_urls", lambda: ["https://x/n8.1.zip"])
     monkeypatch.setattr(inst, "has_libass", lambda ff: True)
     ff, fp = windows.ensure_ffmpeg()
-    assert calls == [windows.FFMPEG_URL]
+    assert calls == ["https://x/n8.1.zip"]
     assert Path(ff) == kit.home() / "bin" / "ffmpeg.exe" and Path(fp).exists()
     assert not list((kit.home() / "bin").glob("*.zip"))
     # second run: already there → no download
@@ -106,8 +146,9 @@ def test_ensure_ffmpeg_replaces_a_build_without_libass(monkeypatch):
     calls = []
     monkeypatch.setattr(windows, "download", lambda url, dest, label="": calls.append(url) or _zip(Path(dest), ["ffmpeg.exe", "ffprobe.exe"]))
     monkeypatch.setattr(inst, "has_libass", lambda ff: Path(ff).read_text() != "old")
+    monkeypatch.setattr(windows, "ffmpeg_urls", lambda: ["https://x/n8.1.zip"])
     windows.ensure_ffmpeg()
-    assert calls == [windows.FFMPEG_URL]
+    assert calls == ["https://x/n8.1.zip"]
 
 
 def test_ensure_node_downloads_22_zip(monkeypatch):

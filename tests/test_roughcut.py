@@ -11,6 +11,7 @@ import subprocess
 import sys
 import wave
 from pathlib import Path
+from types import SimpleNamespace as NS
 
 import numpy as np
 import pytest
@@ -192,6 +193,39 @@ def test_resolve_keep_drops_the_b_half_of_a_split():
     assert len(keep) == 2
     assert keep[1][0] == pytest.approx(1.3)
     assert keep[1][1] == pytest.approx(2.0)   # 1a kept, ends where 1b (dropped) starts
+
+
+WRONG_TYPES = [[1, 2], "drop 1", 5, None, {"split": [1, 2]}, {"split": "25"}, {"split": 3}, {"drop": 3}, {"drop": "12"},
+               {"drop": {"1": 2}}, {"drop": [[1]]}, {"drop": [None]}, {"drop": [True]}, {"gap": "wide"}, {"gap": [0.3]}, {"gap": True}]
+
+
+@pytest.mark.parametrize("spec", WRONG_TYPES)
+def test_resolve_keep_with_wrong_json_types_is_a_thai_error(spec):
+    with pytest.raises(kit.KitError) as e:
+        roughcut.resolve_keep(PH, 4.0, spec)
+    assert "drops.json" in str(e.value) or "split" in str(e.value)
+
+
+@pytest.mark.parametrize("split", [[1, 2], "25", 3, True])
+def test_split_phrases_with_a_non_object_split_is_a_thai_error(split):
+    with pytest.raises(kit.KitError) as e:
+        roughcut.split_phrases(PH, split)
+    assert "split" in str(e.value)
+
+
+@pytest.mark.parametrize("spec", WRONG_TYPES)
+def test_render_with_wrong_json_types_in_drops_fails_cleanly(synth, tmp_path, spec, capsys):
+    drops, out = tmp_path / "drops.json", tmp_path / "o.mp4"
+    drops.write_text(json.dumps(spec), encoding="utf-8")
+    assert roughcut.main(["render", str(synth), str(drops), str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "drops.json" in err or "split" in err
+    assert "Traceback" not in err
+    assert list(tmp_path.glob("*.mp4")) == [] and list(tmp_path.glob("*.partial*")) == []
+
+
+def test_resolve_keep_accepts_a_null_gap_and_string_numbers():
+    assert roughcut.resolve_keep(PH, 4.0, {"gap": None, "drop": ["1"]}) == roughcut.resolve_keep(PH, 4.0, {"gap": 0.3, "drop": [1]})
 
 
 def test_resolve_keep_rejects_unknown_drop_ids():
@@ -518,14 +552,20 @@ def test_remove_survives_a_locked_file(tmp_path, monkeypatch):
     roughcut._remove(tmp_path / "never-existed")
 
 
-def test_phrase_times_follow_the_container_clock_when_audio_starts_late(tmp_path):
+def make_late_clip(tmp_path, offset=0.3):
+    """mp4 whose audio starts `offset` s after the video (the bursts are at BURSTS + offset on the container clock)."""
     wav = tmp_path / "src.wav"
     write_wav(wav, BURSTS, TOTAL)
     late = tmp_path / "late.mp4"
     kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", f"color=c=black:s=320x240:r=30:d={TOTAL + 1}",
-             "-itsoffset", "0.3", "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", late])
+             "-itsoffset", str(offset), "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", late])
     res = kit.run([kit.tool("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=start_time", "-of", "csv=p=0", late])
-    assert float(res.stdout.strip()) > 0.15, "fixture is not really late-starting"   # 0.3 s minus AAC priming
+    assert float(res.stdout.strip()) > offset / 2, "fixture is not really late-starting"   # offset minus AAC priming
+    return late
+
+
+def test_phrase_times_follow_the_container_clock_when_audio_starts_late(tmp_path):
+    late = make_late_clip(tmp_path)
     ph, dur = roughcut.phrases(str(late))
     for (s, e), (es, ee) in zip(ph, BURSTS):
         assert s == pytest.approx(es + 0.3, abs=0.06) and e == pytest.approx(ee + 0.3, abs=0.06)
@@ -534,6 +574,41 @@ def test_phrase_times_follow_the_container_clock_when_audio_starts_late(tmp_path
     assert roughcut.main(["render", str(late), str(drops), str(out)]) == 0
     seg = json.loads(Path(str(out) + ".segments.json").read_text(encoding="utf-8"))
     assert seg["keep"][0][0] >= ph[0][1] - 1e-6
+
+
+def _first_onset(wav_path):
+    with wave.open(str(wav_path)) as w:
+        a = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(np.float32) / 32768.0
+    return int(np.argmax(np.abs(a) > 0.1)) / SR
+
+
+def test_asr_audio_and_phrase_audio_put_the_onset_at_the_same_time(tmp_path):
+    late = make_late_clip(tmp_path)
+    wav = tmp_path / "asr.wav"
+    asr.extract_wav(late, wav)
+    onset = _first_onset(wav)
+    ph, _ = roughcut.phrases(str(late))
+    assert onset == pytest.approx(BURSTS[0][0] + 0.3, abs=0.06)       # container clock, not the 0.2 s the raw samples say
+    assert onset == pytest.approx(ph[0][0], abs=0.03)                 # the same clock the phrases are measured on
+
+
+class BurstEars:
+    """A 'model' that hears the audio it is given: one 0.1 s word at the start of every loud burst."""
+    def transcribe(self, audio, **kw):
+        loud = np.flatnonzero(np.abs(audio) > 0.1)
+        starts = [loud[0]] + [b for a, b in zip(loud, loud[1:]) if b - a > 0.1 * SR] if len(loud) else []
+        segs = [NS(start=s / SR, end=s / SR + 0.4, text=f"w{i}", words=[NS(start=s / SR, end=s / SR + 0.1, word=f"w{i}", probability=1)])
+                for i, s in enumerate(starts)]
+        return iter(segs), NS(language="th")
+
+
+def test_default_phrases_path_matches_asr_tokens_to_phrases_on_one_clock(tmp_path, monkeypatch):
+    late = make_late_clip(tmp_path)
+    monkeypatch.setattr(asr, "backend_choice", lambda: ("faster-whisper", False))
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: BurstEars())
+    out = tmp_path / "p" / "phrases.json"
+    assert roughcut.main(["phrases", str(late), "--out", str(out)]) == 0
+    assert [r["text"] for r in json.loads(out.read_text(encoding="utf-8"))] == ["w0", "w1", "w2", "w3"]
 
 
 # ---------------------------------------------------------------- phrases CLI
@@ -611,7 +686,7 @@ def test_phrases_cli_whisper_rehears_every_phrase_alone_with_padding(synth, tmp_
     assert not fake.many_dirs[0].exists()          # temp wavs are removed after the run
 
 
-def test_phrases_cli_passes_the_glossary_prompt_hint(synth, tmp_path, monkeypatch):
+def test_phrases_cli_hint_goes_to_the_whole_clip_run_but_not_to_per_phrase_runs(synth, tmp_path, monkeypatch):
     fake = FakeASR(monkeypatch)
     cfg = kit.load_config()
     monkeypatch.setenv("TAD_CLIP_HOME", str(tmp_path / "home"))
@@ -619,9 +694,9 @@ def test_phrases_cli_passes_the_glossary_prompt_hint(synth, tmp_path, monkeypatc
     roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "p1.json"), "--whisper"])
     roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "p2.json")])
     base = json.loads((ROOT / "engine" / "subs" / "glossary-base.json").read_text(encoding="utf-8"))["prompt_hint"]
-    expected = base + ", ชื่อแบรนด์ Black Pan"
-    assert fake.many_calls == [expected]
-    assert fake.whole_calls[0][1] == expected
+    assert fake.whole_calls[0][1] == base + ", ชื่อแบรนด์ Black Pan"      # shipped Thai hint + the user's own
+    # measured on the fixture: with the hint, faster-whisper answers 0.1 s phrases with the hint text itself
+    assert fake.many_calls == [None]
 
 
 def test_cli_errors_are_thai_messages_not_tracebacks(tmp_path, capsys):

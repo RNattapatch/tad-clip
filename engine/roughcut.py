@@ -158,6 +158,8 @@ def split_phrases(ph, split):
     ph = [list(p) for p in ph]
     ids = [str(i) for i in range(len(ph))]
     jobs = []
+    if split is not None and not isinstance(split, dict):
+        raise KitError("split ต้องเป็น object แบบ {\"เลขวลี\": เวลาเป็นวินาที} เช่น {\"25\": 55.21}")
     for k, t in (split or {}).items():
         try:
             jobs.append((int(k), str(k), float(t)))
@@ -175,13 +177,21 @@ def split_phrases(ph, split):
 
 def resolve_keep(ph, dur, spec):
     """drops.json content -> the raw ranges to keep (split, drop and gap applied)."""
+    if not isinstance(spec, dict):
+        raise KitError("drops.json ต้องเป็น object แบบ {\"drop\": [เลขวลี…], \"gap\": 0.3, \"split\": {\"25\": 55.21}}")
+    drop_list, gap = spec.get("drop"), spec.get("gap")
+    if drop_list is not None and not (isinstance(drop_list, list) and all(
+            isinstance(d, str) or (isinstance(d, int) and not isinstance(d, bool)) for d in drop_list)):
+        raise KitError("drops.json: \"drop\" ต้องเป็นรายการเลขวลี เช่น [4, 5, \"25b\"]")
+    if gap is not None and (isinstance(gap, bool) or not isinstance(gap, (int, float))):
+        raise KitError("drops.json: \"gap\" ต้องเป็นตัวเลขวินาที เช่น 0.3")
     ph, ids = split_phrases(ph, spec.get("split"))
-    drop = {str(d) for d in spec.get("drop") or []}
+    drop = {str(d) for d in drop_list or []}
     unknown = sorted(drop - set(ids))
     if unknown:
         raise KitError(f"drops.json มีเลขวลีที่ไม่มีอยู่: {', '.join(unknown)} (วลีที่มี: {ids[0] if ids else '-'} ถึง {ids[-1] if ids else '-'}"
                        " — วลีที่ใช้ split จะกลายเป็น Na/Nb)")
-    keep = plan(ph, dur, {i for i, x in enumerate(ids) if x in drop}, float(spec.get("gap", 0.30)))
+    keep = plan(ph, dur, {i for i, x in enumerate(ids) if x in drop}, float(0.30 if gap is None else gap))
     if not keep:
         raise KitError("drops.json ตัดทุกวลีออกหมด ไม่เหลือช่วงให้ render — ลดรายการ drop แล้วสั่งใหม่")
     return keep
@@ -207,7 +217,7 @@ def run_phrases(video, out, whisper=False, force=False):
     prompt = asr.glossary_prompt()
     if whisper:
         print(f"ถอดเสียงทีละวลี {len(ph)} วลี …", file=sys.stderr, flush=True)
-        heard = per_phrase_asr(video, ph, prompt)
+        heard = per_phrase_asr(video, ph)   # no hint here: on 0.1 s phrases faster-whisper echoes it back (whisper.cpp -mc 0 ignores it)
         texts = [heard.get(i, "") for i in range(len(ph))]
     else:
         cache = out.parent / "asr.json"
