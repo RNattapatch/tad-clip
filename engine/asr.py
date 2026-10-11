@@ -142,6 +142,29 @@ def backend_choice():
     return ("whispercpp" if kit.IS_MAC and cpp_ready() else "faster-whisper"), False
 
 
+LARGE_V3 = {"large-v3", "large"}   # faster-whisper's "large" is large-v3
+NO_FILTERS = {"no_speech_threshold": None, "log_prob_threshold": None}
+
+
+def decode_filters(model=None) -> dict:
+    """Extra faster-whisper decode options for this model: {} for large-v3 (its defaults are right for Thai), and the
+    no-speech / log-prob filters switched off for every other model.
+
+    Measured on the Thai fixture (CPU int8): base, small and medium return 0 segments with the default filters, with
+    VAD on or off, because every Thai window scores as low-confidence. With both filters off they return text: medium
+    without a prompt hears the sentences, base gives Thai-ish text; with the kit's Thai hint both are much worse
+    (engine/subs retries a prompted run that comes back empty, one word, stalled or echoing the hint). The whole-clip
+    run keeps VAD on, so silence still never reaches the decoder there."""
+    return {} if model_name(model).strip().lower() in LARGE_V3 else dict(NO_FILTERS)
+
+
+def fw_prompt(prompt, model=None):
+    """The hint faster-whisper actually gets: only large-v3 is helped by the Thai hint (spelling of วิกฤต/แบรนด์/โพสต์);
+    medium/small/base with the hint return mixed-script garbage on the Thai fixture (68 of 130 letters Thai for medium),
+    without it they hear the sentences — so smaller models run without it. whisper.cpp is unaffected."""
+    return prompt if model_name(model).strip().lower() in LARGE_V3 else None
+
+
 def dtw_preset(model):
     """whisper.cpp `-dtw` preset for a model name (large-v3 -> large.v3), None when it has none."""
     name = {"turbo": "large-v3-turbo"}.get(model, model)
@@ -381,12 +404,14 @@ def transcribe(path, prompt=None) -> dict:
             except KitError as e:
                 _cpp_failed(e, explicit)
         audio = _audio_input(wav)
+        filters = decode_filters()
+        prompt = fw_prompt(prompt)
 
         def run(model):
             _seed()
             segments, _ = model.transcribe(audio, language="th", word_timestamps=True, vad_filter=True,
                                            vad_parameters={"min_silence_duration_ms": 500}, beam_size=5,
-                                           initial_prompt=prompt)
+                                           initial_prompt=prompt, **filters)
             return {"transcription": [_segment(s) for s in segments]}
 
         return _run_model(run)
@@ -404,13 +429,16 @@ def transcribe_many(wav_paths, prompt=None) -> list:
             return _transcribe_many_cpp(paths, prompt, cli, ggml)
         except KitError as e:
             _cpp_failed(e, explicit)
+    filters = decode_filters()
+    prompt = fw_prompt(prompt)
 
     def run(model):
         out = []
         for p in paths:
             _seed()
             segments, _ = model.transcribe(_audio_input(Path(p)), language="th", beam_size=5,
-                                           condition_on_previous_text=False, vad_filter=False, initial_prompt=prompt)
+                                           condition_on_previous_text=False, vad_filter=False, initial_prompt=prompt,
+                                           **filters)
             out.append(" ".join(t for t in (s.text.strip() for s in segments) if t))
         return out
 

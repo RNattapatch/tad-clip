@@ -4,6 +4,7 @@ review.md lists every cue with its time and any flags. edits.json is validated h
 reviewer, decides what is accepted. A reviewer that sends back a rewrite instead of a correction is refused.
 """
 import array
+import difflib
 import math
 import sys
 import wave
@@ -16,6 +17,9 @@ STALL_MS = 2500     # one word held longer than this = the ASR lost the speech
 GAP_MS = 2000       # silence between cues longer than this is worth a look
 SPEECH_DB = -45.0   # RMS above this inside a gap = probably speech that was dropped
 GUARD = 0.5         # touching more than this share of the cues = the ASR is wrong, not single words
+ECHO_SHARE = 0.7    # this share of a cue's Thai letters copied, in order, from the ASR hint = probably the hint read back
+ECHO_RUN = 4        # shortest copied run of letters that counts
+ECHO_MIN = 10       # cues with fewer Thai letters than this are never called an echo
 
 
 # ── audio facts used by the flags ──────────────────────────────────────────────────────────
@@ -143,10 +147,29 @@ def _gap_text(secs, a_ms, b_ms, wav):
     return f"{s} · ระดับเสียงช่วงนั้น {lvl:.0f} dB: {verdict}"
 
 
+def _thai_letters(s):
+    return "".join(c for c in s if "\u0e00" <= c <= "\u0e7f")
+
+
+def echo_share(text, hint, protect=()):
+    """0..1: how much of `text` is the ASR hint read back -- the share of its Thai letters that sit in runs of at least
+    ECHO_RUN letters copied, in order, from `hint`. Only Thai letters are compared: tool names that the hint lists
+    (Claude Code, ChatGPT ...) are ordinary speech when someone says them. Protected glossary terms are removed first.
+    Cheap on purpose: a hint (prompt) can make whisper print the hint instead of what was said."""
+    for term in protect:
+        text = text.replace(term, "")
+    t, h = _thai_letters(text), _thai_letters(hint or "")
+    if len(t) < ECHO_MIN or not h:
+        return 0.0
+    blocks = difflib.SequenceMatcher(None, t, h, autojunk=False).get_matching_blocks()
+    return sum(b.size for b in blocks if b.size >= ECHO_RUN) / len(t)
+
+
 def find_flags(cues, applied_fixes, glossary, wav=None):
-    """-> list of {"cue": 1-based number or None, "kind": "ASR STALL"|"GAP"|"GLOSSARY", "text": str}"""
+    """-> list of {"cue": 1-based number or None, "kind": "ASR STALL"|"GAP"|"GLOSSARY"|"PROMPT ECHO?", "text": str}"""
     out = []
     protect = glossary.get("protect", [])
+    hint = glossary.get("prompt_hint", "")
     fixes = list(dict.fromkeys(tuple(x) for x in applied_fixes))
     for n, c in enumerate(cues, 1):
         for w in c.get("words", []):
@@ -158,6 +181,10 @@ def find_flags(cues, applied_fixes, glossary, wav=None):
         if c["f"] - prev_end > GAP_MS:
             where = "ก่อน cue นี้" if n > 1 else "ก่อน cue แรก"
             out.append({"cue": n, "kind": "GAP", "text": _gap_text((c["f"] - prev_end) / 1000, prev_end, c["f"], wav) + f" {where}"})
+        share = echo_share(c["t"], hint, protect)
+        if share >= ECHO_SHARE:
+            out.append({"cue": n, "kind": "PROMPT ECHO?",
+                        "text": f"PROMPT ECHO? บรรทัดนี้ซ้ำคำใบ้ที่ส่งให้ตัวถอดเสียง {share:.0%} — อาจเป็นคำใบ้ที่ถูกอ่านกลับมา ไม่ใช่คำพูดจริง"})
         terms = [p for p in protect if p in c["t"]]
         fixed = [old for old, new in fixes if new in c["t"]]
         if terms or fixed:
@@ -212,6 +239,8 @@ def review_markdown(name, cues, flags, max_chars, work_dir, wav=None):
         "",
         f"- cue ทั้งหมด **{len(cues)}** · เพดาน {max_chars} ตัวอักษรต่อบรรทัด · ซับยาวถึง {total}",
         f"- ธง: {summary}",
+        "- `PROMPT ECHO?` = บรรทัดที่ข้อความภาษาไทยส่วนใหญ่ซ้ำกับคำใบ้ (prompt_hint) ที่ส่งให้ตัวถอดเสียง ตัวถอดเสียงอาจอ่านคำใบ้กลับมาแทนคำพูดจริง "
+        "(เครื่องเดาจากตัวอักษร จึงมีเครื่องหมาย ?) เทียบกับบรรทัดก่อนหลัง ถ้าไม่เข้ากับเรื่องที่พูด ให้ถอดช่วงนั้นใหม่ด้วย `patch` อย่าแก้คำเอง",
         "",
         "## วิธีเขียน edits.json",
         "",
@@ -248,7 +277,7 @@ def review_markdown(name, cues, flags, max_chars, work_dir, wav=None):
         for f in flags:
             lines.append(f"- cue {f['cue']}: {f['text']}" if f["cue"] else f"- {f['text']}")
         lines.append("")
-        lines.append("ถ้าเสียงช่วง GAP / ASR STALL มีคำพูดหายจริง ให้ถอดช่วงนั้นใหม่ด้วย `python -m engine.subs patch` (ดู SKILL) แล้วอ่านไฟล์นี้ใหม่ก่อนเขียน edits.json")
+        lines.append("ถ้าเสียงช่วง GAP / ASR STALL มีคำพูดหายจริง หรือบรรทัด PROMPT ECHO? ไม่เข้ากับเรื่อง ให้ถอดช่วงนั้นใหม่ด้วย `python -m engine.subs patch` (ดู SKILL) แล้วอ่านไฟล์นี้ใหม่ก่อนเขียน edits.json")
     else:
         lines.append("ไม่มีธง")
     lines += ["", "## Cues", ""]

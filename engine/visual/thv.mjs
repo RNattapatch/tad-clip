@@ -616,91 +616,94 @@ async function compose() {
   const src = planPath(plan.source_video);
   if (!existsSync(src)) throw new Error('ไม่เจอคลิป: ' + src);
   const tmp = mkdtempSync(join(tmpdir(), 'thv-compose-')); const list = [];
-  // output = 1080×1920 × K (2k60 → 1440×2560) · every number below stays in 1080 design space, px() converts
-  const px = n => Math.round(n * K), OW = px(W), OH = px(H);
-  // the speaker's clip enters every graph already limited-range BT.709 — graphics are limited range, and a full-range
-  // phone clip that skipped roughcut would otherwise be blended in a different range
-  const P = `${sdr(src)}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},setsar=1,${TO709}`;
-  const KEY = 'chromakey=0x00FF00:0.28:0.06';
-  // plan.face_circle = { window: [x, y, side] of the speaker's 1080×1920 frame, size, card_y, cutout_y, feather, mode }
-  // → on full-card shots (and instead of the PiP box on cutout) the speaker's live face sits in a circle whose edge fades out
-  //   (opaque inside (1-feather)·R, linear fade to 0 at R · no hard ring, the face must not touch the edge)
-  const FC = plan.face_circle;
-  const face = (inp, y, PS = P) => { const [fx, fy, side] = (FC.window || [40, 500, 1000]).map(px), S = px(FC.size || 400), r = S / 2, f = FC.feather ?? 0.28;
-    return `[${inp}]${PS},crop=${side}:${side}:${fx}:${fy},scale=${S}:${S},format=rgba,` +
-      `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*clip((${r}-hypot(X-${r},Y-${r}))/${(r * f).toFixed(1)},0,1)'[fc];` +
-      `[b][fc]overlay=${(OW - S) / 2}:${px(y)}[v]`; };
-  // face_circle.mode "cutout" (default) → the same window of the speaker, really cut out (engine/cutout matte), no circle
-  // bottom (fade_bottom 0.2) and side (fade_side 0.12) fade so crop edges never show · window must reach below the chin or the mouth fades
-  const bust = (inp, y, flip) => { const [fx, fy, side] = (FC.window || [40, 500, 1000]).map(px), S = px(FC.size || 400);
-    return `[${inp}]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},crop=${side}:${side}:${fx}:${fy},scale=${S}:${S},format=rgba,` +
-      `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip((${S}-Y)/${(S * (FC.fade_bottom ?? 0.2)).toFixed(1)},0,1)*clip(min(X,${S}-X)/${(S * (FC.fade_side ?? 0.12)).toFixed(1)},0,1)'[fc];` +
-      `[b][fc]overlay=${(OW - S) / 2}:${px(y)}:format=auto[v]`; };
-  // plan.cutout = { engine, scale } · per shot: cutout_engine, cutout_scale · results cached in OUT/cutout/*.webm
-  // (name carries start + frame count + engine → a retimed shot re-cuts · VP9 alpha ~10 MB/shot; ProRes 4444 at 2K is ~470 MB/shot, never a cache)
-  const CUT = { scale: 0.62, ...(plan.cutout || {}) };
-  const cutoutOf = async (s, ss, n) => {
-    const engine = shotEngine(s); if (engine === 'none' || engine === 'off') return null;
-    const dir = join(OUT, 'cutout'); mkdirSync(dir, { recursive: true });
-    const mov = join(dir, `${s.id}-${ss}-${n}-${engine}.webm`);
-    if (!ARGS.includes('--force') && existsSync(mov) && statSync(mov).mtimeMs > statSync(src).mtimeMs) return mov;   // --force = cut again
-    const seg = join(tmp, `cut-${list.length}.mp4`);   // constant fps, 8-bit SDR → the matte lines up frame for frame
-    await run(['-ss', ss, '-i', src, '-t', (n / FPS + 0.1).toFixed(3), '-an', '-vf', `${sdr(src)}fps=${FPS},${TO709},format=yuv420p`, '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', ...TAG709, seg]);
-    console.log(`… shot ${s.id}: ตัดพื้นหลัง${SPEAKER} (${engine})`);
-    await new Promise((res, rej) => {
-      const p = spawn(tool('python'), ['-m', 'engine.cutout', seg, mov, engine, '--force'], { cwd: KIT_ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, PYTHONUTF8: '1' } });
-      p.on('error', rej); p.on('close', c => c === 0 ? res() : rej(new Error(`ตัดพื้นหลังไม่สำเร็จ (shot ${s.id} · exit ${c})`))); });
-    return mov;
-  };
-  // plan.mirror = [[from, to], …] — ranges where the clip is mirrored (front camera: shirt text reads backwards) → hflip back
-  const MR = plan.mirror || [];
-  const useCutCard = FC && (FC.mode || 'cutout') === 'cutout' && ENGINE !== 'off';
-  for (const s of plan.shots) {
-    const flip = MR.some(([a, b]) => s.t[0] >= a - 0.02 && s.t[1] <= b + 0.02);
-    if (!flip && MR.some(([a, b]) => s.t[0] < b && s.t[1] > a)) console.log(`⚠️  shot ${s.id} คร่อมขอบ plan.mirror — แบ่งช็อตตรงจุดสลับ`);
-    const PS = flip ? `${P},hflip` : P;
-    const n = frames(s), ss = (Math.round(s.t[0] * FPS) / FPS).toFixed(4);
-    const clip = ['mp4', 'mov'].map(e => join(OUT, 'shots', `${s.id}-${s.layout}.${e}`)).find(existsSync);
-    const seg = join(tmp, `seg-${String(list.length).padStart(3, '0')}.mp4`); list.push(seg);
-    const inMain = ['-ss', ss, '-i', src];
-    let fc, ins = inMain;
-    const cut = s.layout === 'cutout' && clip ? await cutoutOf(s, ss, n) : null;
-    const cutCard = s.layout === 'full-card' && clip && FC && s.face !== false && useCutCard ? await cutoutOf(s, ss, n) : null;
-    const foot = ft => `${sdr(planPath(ft.file))}setpts=PTS/${ft.speed || 1},fps=${FPS},${TO709}`;
-    if (cutCard) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cutCard]; fc = `[0:v]fps=${FPS},setsar=1[b];${bust('1:v', FC.card_y ?? 230, flip)}`; }
-    else if (s.layout === 'full-card' && clip && FC && s.face !== false) { ins = ['-i', clip, ...inMain]; fc = `[0:v]fps=${FPS},setsar=1[b];${face('1:v', FC.card_y ?? 230, PS)}`; }
-    else if (s.layout === 'full-card' && clip) { ins = ['-i', clip]; fc = `[0:v]fps=${FPS},setsar=1[v]`; }
-    else if (s.layout === 'split' && s.visual && s.visual.footage) {   // real clip fills the top half (cover-crop) · speaker below · text layer keyed on top
-      const ft = s.visual.footage, [wy, wh] = s.split_window || plan.split_window || [260, 960], half = px(960);
-      ins = [...inMain, '-ss', String(ft.start || 0), '-i', planPath(ft.file), ...(clip ? ['-i', clip] : [])];
-      const sp = wh <= 960 ? `[0:v]${PS},crop=${OW}:${half}:0:${px(wy)}`
-        : `[0:v]${PS},split[pa][pb];[pa]crop=${OW}:${half}:0:${px(wy)},boxblur=40:2[pbg];[pb]crop=${OW}:${px(wh)}:0:${px(wy)},scale=-2:${half}[pfg];[pbg][pfg]overlay=(W-w)/2:0`;
-      fc = `${sp},pad=${OW}:${OH}:0:${half}[pp];[1:v]${foot(ft)},scale=${OW}:${half}:force_original_aspect_ratio=increase,crop=${OW}:${half},setsar=1[ft];[pp][ft]overlay=0:0` + (clip ? `[p];[2:v]${KEY}[o];[p][o]overlay=0:0[v]` : '[v]'); }
-    else if (s.layout === 'proof' && s.visual && s.visual.footage) {   // real clip full frame (cover-crop)
-      const ft = s.visual.footage; ins = ['-ss', String(ft.start || 0), '-i', planPath(ft.file), ...(clip ? ['-i', clip] : [])];
-      fc = `[0:v]${foot(ft)},scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},setsar=1` + (clip ? `[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]` : '[v]'); }
-    else if (s.layout === 'split' && clip) {   // split_window = [y, h]: window of the speaker's 1080×1920 frame shown in the bottom half
-      ins = [...inMain, '-i', clip]; const [wy, wh] = s.split_window || plan.split_window || [260, 960];   // per-shot override (e.g. zoom out to show a shirt logo)
-      const half = px(960);
-      const sp = wh <= 960 ? `[0:v]${PS},crop=${OW}:${half}:0:${px(wy)}`   // 1:1 crop (default)
-        : `[0:v]${PS},split[pa][pb];[pa]crop=${OW}:${half}:0:${px(wy)},boxblur=40:2[pbg];[pb]crop=${OW}:${px(wh)}:0:${px(wy)},scale=-2:${half}[pfg];[pbg][pfg]overlay=(W-w)/2:0`;   // fit + blurred sides
-      fc = `${sp},pad=${OW}:${OH}:0:${half}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
-    else if (cut) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cut]; const cw = Math.round(OW * (s.cutout_scale ?? CUT.scale) / 2) * 2;   // libvpx decoder keeps the alpha · whole frame scaled down, bottom edge on the frame bottom
-      fc = `[0:v]fps=${FPS},setsar=1[b];[1:v]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},scale=${cw}:-2,setsar=1[p];[b][p]overlay=(W-w)/2:H-h:format=auto[v]`; }
-    else if (s.layout === 'cutout' && clip && FC && s.face !== false) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];${face('0:v', FC.cutout_y ?? 850, PS)}`; }
-    else if (s.layout === 'cutout' && clip) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];[0:v]${PS},scale=${px(600)}:-2,crop=${px(600)}:${px(760)}:0:${px(120)},pad=${px(612)}:${px(772)}:${px(6)}:${px(6)}:white[p];[b][p]overlay=(W-w)/2:H-h-${px(40)}[v]`; }
-    else if (clip) { ins = [...inMain, '-i', clip]; fc = `[0:v]${PS}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
-    else fc = `[0:v]${PS}[v]`;
-    await run([...ins, '-filter_complex', `${fc};[v]${TO709},format=yuv420p[vo]`, '-map', '[vo]', '-frames:v', String(n), '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'veryfast', ...TAG709, '-r', String(FPS), seg]);
+  try {   // the temp folder goes away on success and on failure (a failed ffmpeg on Windows would leave GBs in %TEMP%)
+    // output = 1080×1920 × K (2k60 → 1440×2560) · every number below stays in 1080 design space, px() converts
+    const px = n => Math.round(n * K), OW = px(W), OH = px(H);
+    // the speaker's clip enters every graph already limited-range BT.709 — graphics are limited range, and a full-range
+    // phone clip that skipped roughcut would otherwise be blended in a different range
+    const P = `${sdr(src)}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},setsar=1,${TO709}`;
+    const KEY = 'chromakey=0x00FF00:0.28:0.06';
+    // plan.face_circle = { window: [x, y, side] of the speaker's 1080×1920 frame, size, card_y, cutout_y, feather, mode }
+    // → on full-card shots (and instead of the PiP box on cutout) the speaker's live face sits in a circle whose edge fades out
+    //   (opaque inside (1-feather)·R, linear fade to 0 at R · no hard ring, the face must not touch the edge)
+    const FC = plan.face_circle;
+    const face = (inp, y, PS = P) => { const [fx, fy, side] = (FC.window || [40, 500, 1000]).map(px), S = px(FC.size || 400), r = S / 2, f = FC.feather ?? 0.28;
+      return `[${inp}]${PS},crop=${side}:${side}:${fx}:${fy},scale=${S}:${S},format=rgba,` +
+        `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*clip((${r}-hypot(X-${r},Y-${r}))/${(r * f).toFixed(1)},0,1)'[fc];` +
+        `[b][fc]overlay=${(OW - S) / 2}:${px(y)}[v]`; };
+    // face_circle.mode "cutout" (default) → the same window of the speaker, really cut out (engine/cutout matte), no circle
+    // bottom (fade_bottom 0.2) and side (fade_side 0.12) fade so crop edges never show · window must reach below the chin or the mouth fades
+    const bust = (inp, y, flip) => { const [fx, fy, side] = (FC.window || [40, 500, 1000]).map(px), S = px(FC.size || 400);
+      return `[${inp}]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},crop=${side}:${side}:${fx}:${fy},scale=${S}:${S},format=rgba,` +
+        `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip((${S}-Y)/${(S * (FC.fade_bottom ?? 0.2)).toFixed(1)},0,1)*clip(min(X,${S}-X)/${(S * (FC.fade_side ?? 0.12)).toFixed(1)},0,1)'[fc];` +
+        `[b][fc]overlay=${(OW - S) / 2}:${px(y)}:format=auto[v]`; };
+    // plan.cutout = { engine, scale } · per shot: cutout_engine, cutout_scale · results cached in OUT/cutout/*.webm
+    // (name carries start + frame count + engine → a retimed shot re-cuts · VP9 alpha ~10 MB/shot; ProRes 4444 at 2K is ~470 MB/shot, never a cache)
+    const CUT = { scale: 0.62, ...(plan.cutout || {}) };
+    const cutoutOf = async (s, ss, n) => {
+      const engine = shotEngine(s); if (engine === 'none' || engine === 'off') return null;
+      const dir = join(OUT, 'cutout'); mkdirSync(dir, { recursive: true });
+      const mov = join(dir, `${s.id}-${ss}-${n}-${engine}.webm`);
+      if (!ARGS.includes('--force') && existsSync(mov) && statSync(mov).mtimeMs > statSync(src).mtimeMs) return mov;   // --force = cut again
+      const seg = join(tmp, `cut-${list.length}.mp4`);   // constant fps, 8-bit SDR → the matte lines up frame for frame
+      await run(['-ss', ss, '-i', src, '-t', (n / FPS + 0.1).toFixed(3), '-an', '-vf', `${sdr(src)}fps=${FPS},${TO709},format=yuv420p`, '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', ...TAG709, seg]);
+      console.log(`… shot ${s.id}: ตัดพื้นหลัง${SPEAKER} (${engine})`);
+      await new Promise((res, rej) => {
+        const p = spawn(tool('python'), ['-m', 'engine.cutout', seg, mov, engine, '--force'], { cwd: KIT_ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, PYTHONUTF8: '1' } });
+        p.on('error', rej); p.on('close', c => c === 0 ? res() : rej(new Error(`ตัดพื้นหลังไม่สำเร็จ (shot ${s.id} · exit ${c})`))); });
+      return mov;
+    };
+    // plan.mirror = [[from, to], …] — ranges where the clip is mirrored (front camera: shirt text reads backwards) → hflip back
+    const MR = plan.mirror || [];
+    const useCutCard = FC && (FC.mode || 'cutout') === 'cutout' && ENGINE !== 'off';
+    for (const s of plan.shots) {
+      const flip = MR.some(([a, b]) => s.t[0] >= a - 0.02 && s.t[1] <= b + 0.02);
+      if (!flip && MR.some(([a, b]) => s.t[0] < b && s.t[1] > a)) console.log(`⚠️  shot ${s.id} คร่อมขอบ plan.mirror — แบ่งช็อตตรงจุดสลับ`);
+      const PS = flip ? `${P},hflip` : P;
+      const n = frames(s), ss = (Math.round(s.t[0] * FPS) / FPS).toFixed(4);
+      const clip = ['mp4', 'mov'].map(e => join(OUT, 'shots', `${s.id}-${s.layout}.${e}`)).find(existsSync);
+      const seg = join(tmp, `seg-${String(list.length).padStart(3, '0')}.mp4`); list.push(seg);
+      const inMain = ['-ss', ss, '-i', src];
+      let fc, ins = inMain;
+      const cut = s.layout === 'cutout' && clip ? await cutoutOf(s, ss, n) : null;
+      const cutCard = s.layout === 'full-card' && clip && FC && s.face !== false && useCutCard ? await cutoutOf(s, ss, n) : null;
+      const foot = ft => `${sdr(planPath(ft.file))}setpts=PTS/${ft.speed || 1},fps=${FPS},${TO709}`;
+      if (cutCard) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cutCard]; fc = `[0:v]fps=${FPS},setsar=1[b];${bust('1:v', FC.card_y ?? 230, flip)}`; }
+      else if (s.layout === 'full-card' && clip && FC && s.face !== false) { ins = ['-i', clip, ...inMain]; fc = `[0:v]fps=${FPS},setsar=1[b];${face('1:v', FC.card_y ?? 230, PS)}`; }
+      else if (s.layout === 'full-card' && clip) { ins = ['-i', clip]; fc = `[0:v]fps=${FPS},setsar=1[v]`; }
+      else if (s.layout === 'split' && s.visual && s.visual.footage) {   // real clip fills the top half (cover-crop) · speaker below · text layer keyed on top
+        const ft = s.visual.footage, [wy, wh] = s.split_window || plan.split_window || [260, 960], half = px(960);
+        ins = [...inMain, '-ss', String(ft.start || 0), '-i', planPath(ft.file), ...(clip ? ['-i', clip] : [])];
+        const sp = wh <= 960 ? `[0:v]${PS},crop=${OW}:${half}:0:${px(wy)}`
+          : `[0:v]${PS},split[pa][pb];[pa]crop=${OW}:${half}:0:${px(wy)},boxblur=40:2[pbg];[pb]crop=${OW}:${px(wh)}:0:${px(wy)},scale=-2:${half}[pfg];[pbg][pfg]overlay=(W-w)/2:0`;
+        fc = `${sp},pad=${OW}:${OH}:0:${half}[pp];[1:v]${foot(ft)},scale=${OW}:${half}:force_original_aspect_ratio=increase,crop=${OW}:${half},setsar=1[ft];[pp][ft]overlay=0:0` + (clip ? `[p];[2:v]${KEY}[o];[p][o]overlay=0:0[v]` : '[v]'); }
+      else if (s.layout === 'proof' && s.visual && s.visual.footage) {   // real clip full frame (cover-crop)
+        const ft = s.visual.footage; ins = ['-ss', String(ft.start || 0), '-i', planPath(ft.file), ...(clip ? ['-i', clip] : [])];
+        fc = `[0:v]${foot(ft)},scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},setsar=1` + (clip ? `[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]` : '[v]'); }
+      else if (s.layout === 'split' && clip) {   // split_window = [y, h]: window of the speaker's 1080×1920 frame shown in the bottom half
+        ins = [...inMain, '-i', clip]; const [wy, wh] = s.split_window || plan.split_window || [260, 960];   // per-shot override (e.g. zoom out to show a shirt logo)
+        const half = px(960);
+        const sp = wh <= 960 ? `[0:v]${PS},crop=${OW}:${half}:0:${px(wy)}`   // 1:1 crop (default)
+          : `[0:v]${PS},split[pa][pb];[pa]crop=${OW}:${half}:0:${px(wy)},boxblur=40:2[pbg];[pb]crop=${OW}:${px(wh)}:0:${px(wy)},scale=-2:${half}[pfg];[pbg][pfg]overlay=(W-w)/2:0`;   // fit + blurred sides
+        fc = `${sp},pad=${OW}:${OH}:0:${half}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
+      else if (cut) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cut]; const cw = Math.round(OW * (s.cutout_scale ?? CUT.scale) / 2) * 2;   // libvpx decoder keeps the alpha · whole frame scaled down, bottom edge on the frame bottom
+        fc = `[0:v]fps=${FPS},setsar=1[b];[1:v]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},scale=${cw}:-2,setsar=1[p];[b][p]overlay=(W-w)/2:H-h:format=auto[v]`; }
+      else if (s.layout === 'cutout' && clip && FC && s.face !== false) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];${face('0:v', FC.cutout_y ?? 850, PS)}`; }
+      else if (s.layout === 'cutout' && clip) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];[0:v]${PS},scale=${px(600)}:-2,crop=${px(600)}:${px(760)}:0:${px(120)},pad=${px(612)}:${px(772)}:${px(6)}:${px(6)}:white[p];[b][p]overlay=(W-w)/2:H-h-${px(40)}[v]`; }
+      else if (clip) { ins = [...inMain, '-i', clip]; fc = `[0:v]${PS}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
+      else fc = `[0:v]${PS}[v]`;
+      await run([...ins, '-filter_complex', `${fc};[v]${TO709},format=yuv420p[vo]`, '-map', '[vo]', '-frames:v', String(n), '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'veryfast', ...TAG709, '-r', String(FPS), seg]);
+    }
+    // concat list with bare names next to it (no quoting / drive-letter trouble on Windows)
+    writeFileSync(join(tmp, 'list.txt'), list.map(f => `file '${basename(f)}'`).join('\n'));
+    const silent = join(tmp, 'video.mp4'), out = join(OUT, 'preview-composite.mp4');
+    await run(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', silent], { cwd: tmp });
+    await run(['-i', silent, '-i', src, '-map', '0:v', '-map', '1:a?', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', out]);
+    const cuts = plan.shots.filter(s => s.layout === 'cutout').map(shotEngine);
+    console.log(`✓ preview-composite.mp4 (${plan.shots.at(-1).t[1]} วิ · ${OW}×${OH} @ ${FPS} · ภาพ+การ์ดบนคลิปจริง${FC ? (useCutCard ? ` · ${SPEAKER}ตัดพื้นบนการ์ด` : ` · หน้า${SPEAKER}วงกลมบนการ์ด`) : ''}${cuts.length ? ` · cutout ตัดพื้นจริง (${[...new Set(cuts)].join('/')})` : ''})`);
+  } finally {
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* Windows may hold a file a moment longer */ }
   }
-  // concat list with bare names next to it (no quoting / drive-letter trouble on Windows)
-  writeFileSync(join(tmp, 'list.txt'), list.map(f => `file '${basename(f)}'`).join('\n'));
-  const silent = join(tmp, 'video.mp4'), out = join(OUT, 'preview-composite.mp4');
-  await run(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', silent], { cwd: tmp });
-  await run(['-i', silent, '-i', src, '-map', '0:v', '-map', '1:a?', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', out]);
-  rmSync(tmp, { recursive: true, force: true });
-  const cuts = plan.shots.filter(s => s.layout === 'cutout').map(shotEngine);
-  console.log(`✓ preview-composite.mp4 (${plan.shots.at(-1).t[1]} วิ · ${OW}×${OH} @ ${FPS} · ภาพ+การ์ดบนคลิปจริง${FC ? (useCutCard ? ` · ${SPEAKER}ตัดพื้นบนการ์ด` : ` · หน้า${SPEAKER}วงกลมบนการ์ด`) : ''}${cuts.length ? ` · cutout ตัดพื้นจริง (${[...new Set(cuts)].join('/')})` : ''})`);
 }
 
 // ---------------------------------------------------------------- subs (burn the karaoke .ass on the composite · needs compose first)

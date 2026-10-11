@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import wave
 from pathlib import Path
 
 from engine import kit
@@ -49,27 +50,64 @@ def _say(msg):
 # ── run: video -> audio.wav -> asr.json -> raw cues + review.md ────────────────────────────
 
 _NO_SPEECH = "ถอดเสียงแล้วไม่ได้ซับเลย — เช็คว่าคลิปมีเสียงพูดจริง"
+STALL_SHARE = 0.5   # one word (longer than ae.STALL_MS) over this share of the audio = the decoder stalled on the hint
+
+
+def _real_words(result):
+    """The real word tokens of an ASR result (specials like [_BEG_] and blanks do not count)."""
+    return [t for seg in (result or {}).get("transcription", []) for t in seg.get("tokens", [])
+            if t.get("text", "").strip() and not t["text"].startswith("[_")]
 
 
 def _has_words(result):
-    """True when an ASR result holds at least one real word (specials like [_BEG_] and blanks do not count)."""
-    return any(t.get("text", "").strip() and not t["text"].startswith("[_")
-               for seg in (result or {}).get("transcription", []) for t in seg.get("tokens", []))
+    """True when an ASR result holds at least one real word."""
+    return bool(_real_words(result))
+
+
+def _audio_ms(wav):
+    try:
+        return ae.audio_seconds(wav) * 1000
+    except (OSError, EOFError, ValueError, wave.Error):
+        return None
+
+
+def _weak(result, audio_ms, prompt=""):
+    """Why a prompted transcription counts as failed (Thai, for the notice), or None when it looks fine:
+    no words · one word only · stalled = a single word held longer than ae.STALL_MS that covers more than half the
+    audio (Windows CI smoke: faster-whisper `base` with the Thai hint gave one word stretched over 14 s) · echo = the
+    text is mostly the prompt itself (ae.echo_share, the same test as review.md's PROMPT ECHO? flag)."""
+    words = _real_words(result)
+    if not words:
+        return "ไม่ได้คำพูดเลย"
+    if len(words) == 1:
+        return "ได้คำพูดคำเดียว"
+    if ae.echo_share("".join(t["text"] for t in words), prompt) >= ae.ECHO_SHARE:
+        return "ได้ข้อความที่ซ้ำคำใบ้แทนคำพูด"
+    total = audio_ms or max(t["offsets"]["to"] for t in words)
+    for t in words:
+        span = t["offsets"]["to"] - t["offsets"]["from"]
+        if span > ae.STALL_MS and span > total * STALL_SHARE:
+            return f"ได้คำว่า \"{t['text'].strip()}\" ค้างยาว {span / 1000:.1f} วิ (เกินครึ่งของเสียง)"
+    return None
 
 
 def _transcribe(wav, prompt):
     """engine.asr.transcribe -> whisper.cpp -ojf shaped dict. Imported lazily so the rest works without whisper.
 
-    faster-whisper sometimes returns nothing at all when it is given an initial prompt (seen on the Windows CI
-    smoke test, different on every call). A prompted run that comes back without words is retried once without
-    the prompt, and says so; still empty is the usual "no speech" error, and nothing is cached as done."""
+    A prompt can pull the decoder off the speech: faster-whisper has returned nothing at all, a single word, or one
+    word stretched over most of the clip when given the hint (seen on the Windows CI smoke test). A prompted run that
+    looks like that (_weak) is retried once without the prompt, and says so; the retry wins unless it heard nothing
+    at all. Still empty is the usual "no speech" error, and nothing is cached as done."""
     fix = "พิมพ์ \"ตรวจเครื่อง tad-clip\" ให้ Claude ติดตั้งส่วนที่ขาดให้"
     try:
         from engine import asr
         result = asr.transcribe(str(wav), prompt=prompt)
-        if prompt and not _has_words(result):
-            _say("ตัวถอดเสียงไม่ได้คำพูดเลยเมื่อใส่คำใบ้ — ถอดใหม่อีกครั้งโดยไม่ใส่คำใบ้")
-            result = asr.transcribe(str(wav), prompt=None)
+        why = _weak(result, _audio_ms(wav), prompt) if prompt else None
+        if why:
+            _say(f"ใส่คำใบ้แล้วตัวถอดเสียง{why} — ถอดใหม่อีกครั้งโดยไม่ใส่คำใบ้")
+            retry = asr.transcribe(str(wav), prompt=None)
+            if _has_words(retry) or not _has_words(result):
+                result = retry
     except kit.KitError:
         raise
     except ImportError as e:
@@ -79,6 +117,41 @@ def _transcribe(wav, prompt):
     if not _has_words(result):
         raise kit.KitError(_NO_SPEECH)
     return result
+
+
+STAMP = "source.json"   # size + mtime of the clip audio.wav was made from
+
+
+def source_stamp(video):
+    st = Path(video).stat()
+    return {"name": Path(video).name, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def source_changed(video, d):
+    """True when audio.wav / asr.json in d were made from another version of `video` (re-rendered or re-shot under the
+    same name). d/source.json holds the size + mtime of the clip audio.wav came from; a folder an older kit made without
+    it counts as changed when the clip is newer than its audio.wav / asr.json."""
+    cached = [p for p in (d / "audio.wav", d / "asr.json") if p.exists()]
+    if not cached:
+        return False
+    now = source_stamp(video)
+    try:
+        old = json.loads((d / STAMP).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = None
+    if isinstance(old, dict) and "size" in old and "mtime_ns" in old:
+        return (old["size"], old["mtime_ns"]) != (now["size"], now["mtime_ns"])
+    return now["mtime_ns"] > min(p.stat().st_mtime_ns for p in cached)
+
+
+def _write_stamp(video, d):
+    stamp, p = source_stamp(video), d / STAMP
+    try:
+        if json.loads(p.read_text(encoding="utf-8")) == stamp:
+            return
+    except (OSError, ValueError):
+        pass
+    _write_json(p, stamp)
 
 
 def extract_audio(src, wav, start_s=None, dur_s=None):
@@ -161,11 +234,18 @@ def _cmd_run(argv):
     glossary = ms.load_glossary(cfg.get("glossary"))
 
     wav, asr_p = d / "audio.wav", d / "asr.json"
+    if not a.force and source_changed(video, d):
+        # the old audio/transcript belong to a cut that no longer exists; edits.json is the user's and stays
+        _say(f"{video.name} เปลี่ยนไปจากรอบก่อน (ตัดใหม่หรือถ่ายใหม่) — แยกเสียงและถอดเสียงใหม่ให้ "
+             "· edits.json เดิมไม่ถูกแตะ แต่เขียนจากคัตเก่า เลข cue จะเปลี่ยน อ่าน review.md ใหม่แล้วเขียน edits.json ใหม่")
+        for old in (wav, asr_p, d / "asr.before-patch.json"):
+            old.unlink(missing_ok=True)
     if wav.exists() and not a.force:
         _say("1/3 ใช้ audio.wav เดิม")
     else:
         _say("1/3 แยกเสียง → audio.wav")
         extract_audio(video, wav)
+    _write_stamp(video, d)
     if asr_p.exists() and not a.force:
         _say("2/3 ใช้ asr.json เดิม (ถอดใหม่ด้วย --force)")
     else:

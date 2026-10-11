@@ -164,6 +164,7 @@ def test_tb_runs_with_the_kit_model_caches(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(cutout.kit, "run", fake_run)
+    monkeypatch.setattr(cutout.kit, "tool", lambda name: name)   # the fresh home has no tools; PATH may have no ffmpeg (CI)
     work = tmp_path / "งาน"
     work.mkdir()
     (work / "src.mp4").write_bytes(b"clip")

@@ -402,6 +402,19 @@ function grayBand(file, at) {   // raw luma of the subtitle band (y 1240–1460 
   return r.stdout;
 }
 
+test('compose removes its temp folder when ffmpeg fails mid-way (Windows keeps whatever is left in %TEMP%)', () => {
+  const dir = workDir(), tmp = workDir();
+  mkdirSync(join(dir, 'assets', 'footage'), { recursive: true });
+  writeFileSync(join(dir, 'assets', 'footage', 'พัง.mp4'), 'not a video');   // passes check (file exists), breaks ffmpeg
+  const plan = writePlan(dir, { title: 't', source_video: relative(dir, FIXTURE), proof_exempt: 'test', shots: [
+    { id: '01', t: [0, 1], layout: 'full-speaker', say: 'ก่อน' },
+    { id: '02', t: [1, 2], layout: 'proof', say: 'พัง', visual: { proof: 'x', footage: { file: 'assets/footage/พัง.mp4', start: 0 } } }] });
+  const r = node(['compose', plan], { TMPDIR: tmp, TMP: tmp, TEMP: tmp });
+  assert.notEqual(r.status, 0, 'compose should fail on a broken footage file');
+  assert.deepEqual(readdirSync(tmp).filter(n => n.startsWith('thv-compose-')), [], 'temp folder left behind');
+  assert.ok(!existsSync(join(dir, 'out', 'preview-composite.mp4')));
+});
+
 test('2-shot plan (full-card + overlay) renders onto the fixture: 1080x1920, no black shots, subs burn', async t => {
   const dir = workDir();
   t.after(() => rmSync(dir, { recursive: true, force: true }));

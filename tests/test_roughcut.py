@@ -266,7 +266,7 @@ def test_render_fixture_gives_a_shorter_playable_sdr_cfr_mp4(fixture_render):
 
 def test_render_writes_segments_json_and_cleans_up(fixture_render):
     seg = json.loads(Path(str(fixture_render) + ".segments.json").read_text(encoding="utf-8"))
-    assert set(seg) == {"source", "drop", "keep"}
+    assert set(seg) == {"source", "size", "mtime_ns", "drop", "keep"}     # size + mtime: which take this cut came from
     assert seg["drop"] == [] and Path(seg["source"]).name == FIXTURE.name
     assert all(0 <= s < e for s, e in seg["keep"])
     _, dur = probe(fixture_render)
@@ -482,6 +482,8 @@ def test_every_ffmpeg_call_has_nostdin(synth, tmp_path, monkeypatch):
 
 
 def test_render_retries_with_the_old_filter_script_option(synth, tmp_path, monkeypatch):
+    """Both render attempts are faked: the real ffmpeg here may be a build that has dropped -filter_complex_script
+    (Homebrew ffmpeg 8 on the macOS runners) or one that never had -/filter_complex. Only the retry logic is tested."""
     tried, real = [], kit.run
 
     def run(cmd, **kw):
@@ -491,6 +493,10 @@ def test_render_retries_with_the_old_filter_script_option(synth, tmp_path, monke
             raise kit.KitError("คำสั่ง ffmpeg ล้มเหลว (exit 1)\nUnrecognized option '/filter_complex'.\nError splitting the argument list: Option not found")
         if "-filter_complex_script" in cmd:
             tried.append("-filter_complex_script")
+            script = Path(cmd[cmd.index("-filter_complex_script") + 1])
+            assert "concat=n=" in script.read_text(encoding="utf-8")       # the graph file is there while ffmpeg runs
+            Path(cmd[-1]).write_bytes(b"rendered")                         # what ffmpeg would write: the .partial file
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return real(cmd, **kw)
 
     monkeypatch.setattr(kit, "run", run)
@@ -669,6 +675,75 @@ def test_phrases_cli_force_reuses_cached_asr_only_when_not_forced(synth, tmp_pat
     assert len(fake.whole_calls) == 1
     roughcut.main(["phrases", str(synth), "--out", str(out), "--force"])
     assert len(fake.whole_calls) == 2
+
+
+def test_phrases_cli_redoes_everything_for_a_reshot_video_with_the_same_name(tmp_path, monkeypatch, capsys):
+    fake = FakeASR(monkeypatch)
+    video = make_clip(tmp_path / "คลิป ถ่ายใหม่.mp4", BURSTS, TOTAL)
+    out = tmp_path / "งาน" / "phrases.json"
+    assert roughcut.main(["phrases", str(video), "--out", str(out)]) == 0
+    stamp = json.loads((out.parent / "phrases.source.json").read_text(encoding="utf-8"))
+    assert stamp["size"] == video.stat().st_size
+    out.write_text(json.dumps([{"i": 0, "s": 0.5, "e": 1.0, "text": "แก้เอง", "gap": 0.3}]), encoding="utf-8")
+    capsys.readouterr()
+
+    make_clip(video, [(0.5, 1.5), (2.0, 3.0)], 3.5)                       # re-shot: two phrases now, same file name
+    assert roughcut.main(["phrases", str(video), "--out", str(out)]) == 0
+    said = capsys.readouterr().out
+    assert "เปลี่ยน" in said and "drops.json" in said                       # says why, and that the take picks are stale
+    rows = json.loads(out.read_text(encoding="utf-8"))
+    assert len(rows) == 2 and len(fake.whole_calls) == 2                    # new phrases, transcribed again (cache ignored)
+    old = json.loads((out.parent / "phrases.previous.json").read_text(encoding="utf-8"))
+    assert old[0]["text"] == "แก้เอง"                                      # the hand-edited list is kept, not lost
+
+    capsys.readouterr()
+    assert roughcut.main(["phrases", str(video), "--out", str(out)]) == 0   # current again: plain skip
+    assert len(fake.whole_calls) == 2 and "ข้าม" in capsys.readouterr().out
+
+
+def test_phrases_cli_does_not_reuse_an_old_asr_cache_after_a_reshoot(tmp_path, monkeypatch):
+    fake = FakeASR(monkeypatch)
+    video = make_clip(tmp_path / "v.mp4", BURSTS, TOTAL)
+    out = tmp_path / "phrases.json"
+    roughcut.main(["phrases", str(video), "--out", str(out), "--whisper"])   # --whisper: no asr.json written
+    roughcut.main(["phrases", str(video), "--out", str(out), "--force"])     # asr.json of this take
+    make_clip(video, [(0.5, 1.5), (2.0, 3.0)], 3.5)
+    out.unlink()                                                             # phrases gone, asr.json still there
+    roughcut.main(["phrases", str(video), "--out", str(out)])
+    assert len(fake.whole_calls) == 2
+
+
+def test_phrases_from_an_older_kit_without_a_stamp_compare_file_times(tmp_path, monkeypatch):
+    fake = FakeASR(monkeypatch)
+    video = make_clip(tmp_path / "v.mp4", BURSTS, TOTAL)
+    out = tmp_path / "phrases.json"
+    roughcut.main(["phrases", str(video), "--out", str(out)])
+    (tmp_path / "phrases.source.json").unlink()
+    made = out.stat().st_mtime_ns
+    os.utime(video, ns=(made - 60_000_000_000, made - 60_000_000_000))        # older than its phrases: still current
+    roughcut.main(["phrases", str(video), "--out", str(out)])
+    assert len(fake.whole_calls) == 1 and (tmp_path / "phrases.source.json").is_file()
+    (tmp_path / "phrases.source.json").unlink()
+    os.utime(video, ns=(made + 60_000_000_000, made + 60_000_000_000))        # newer: re-shot after the list was made
+    roughcut.main(["phrases", str(video), "--out", str(out)])
+    assert len(fake.whole_calls) == 2
+
+
+def test_render_will_not_skip_onto_a_roughcut_of_another_take(tmp_path, capsys):
+    video = make_clip(tmp_path / "v.mp4", BURSTS, TOTAL)
+    out = tmp_path / "roughcut.mp4"
+    assert roughcut.main(["render", str(video), str(_drops(tmp_path / "d.json")), str(out)]) == 0
+    assert roughcut.main(["render", str(video), str(_drops(tmp_path / "d.json")), str(out)]) == 0   # same take: skip
+    assert "ข้าม" in capsys.readouterr().out
+    make_clip(video, [(0.5, 1.5), (2.0, 3.0), (3.4, 3.9), (4.3, 4.8)], 5.2)  # re-shot under the same name
+    before = out.read_bytes()
+    assert roughcut.main(["render", str(video), str(_drops(tmp_path / "d.json")), str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "เปลี่ยน" in err and "--force" in err and "drops.json" in err
+    assert out.read_bytes() == before                                        # nothing overwritten without --force
+    assert roughcut.main(["render", str(video), str(_drops(tmp_path / "d.json")), str(out), "--force"]) == 0
+    seg = json.loads(Path(str(out) + ".segments.json").read_text(encoding="utf-8"))
+    assert seg["size"] == video.stat().st_size
 
 
 def test_phrases_cli_whisper_rehears_every_phrase_alone_with_padding(synth, tmp_path, monkeypatch, capsys):

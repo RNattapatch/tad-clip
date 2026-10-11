@@ -1,6 +1,7 @@
 """Tests for engine/subs — Thai karaoke subtitles (cue builder, review.md, edits, finalize, burn)."""
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -454,6 +455,52 @@ def test_review_flags_stall_gap_and_glossary(tmp_path):
     assert claude_line and "GLOSSARY" in claude_line[0]
 
 
+def _cue(t, f=0, to=2000):
+    return {"f": f, "to": to, "t": t, "words": []}
+
+
+def test_prompt_echo_flags_a_cue_that_reads_the_hint_back():
+    g = make_subs.load_glossary({})
+    cues = [_cue("ขอบคุณที่ดูนะครับ"),
+            _cue("เรื่องธุรกิจ การขาย การตลาด ลูกค้า ทีมงาน", 2000, 4000),      # the shipped hint, read back
+            _cue("ใช้ Claude Code กับ ChatGPT ตอบลูกค้า", 4000, 6000),           # tool names the hint lists: real speech
+            _cue("วันนี้จะเล่าเรื่องการขาย", 6000, 8000),                         # two hint words inside real speech
+            _cue("ทีมงานและลูกค้า", 8000, 9000)]
+    echo = [f for f in apply_edits.find_flags(cues, [], g) if f["kind"] == "PROMPT ECHO?"]
+    assert [f["cue"] for f in echo] == [2]
+    assert echo[0]["text"].startswith("PROMPT ECHO?") and "คำใบ้" in echo[0]["text"]
+
+
+def test_prompt_echo_uses_the_users_hint_too():
+    g = make_subs.load_glossary({"prompt_hint": "ร้านกาแฟบ้านสวนสามพราน เมนูลาเต้มะพร้าว"})
+    cues = [_cue("ร้านกาแฟบ้านสวนสามพราน"), _cue("เมนูขายดีของร้านเรา", 2000, 4000)]
+    assert [f["cue"] for f in apply_edits.find_flags(cues, [], g) if f["kind"] == "PROMPT ECHO?"] == [1]
+
+
+@pytest.mark.parametrize("text, hint, share", [
+    ("เรื่องธุรกิจ การขาย การตลาด", "คลิปพูดภาษาไทยเรื่องธุรกิจ การขาย การตลาด", 1.0),
+    ("ใช้ ChatGPT กับ Gemini", "เครื่องมือ AI เช่น ChatGPT, Gemini", 0.0),        # Latin names never count
+    ("สั้น", "สั้น", 0.0),                                                         # too short to judge
+    ("", "คำใบ้", 0.0), ("คำพูดจริงๆยาวพอสมควร", "", 0.0),
+])
+def test_echo_share(text, hint, share):
+    assert apply_edits.echo_share(text, hint) == pytest.approx(share, abs=0.01)
+
+
+def test_review_md_header_explains_the_prompt_echo_flag(tmp_path):
+    md = (make_work(tmp_path) / "review.md").read_text(encoding="utf-8")
+    head = md.split("## Flags")[0]
+    assert "PROMPT ECHO?" in head and "คำใบ้" in head and "patch" in head
+
+
+def test_a_prompted_result_that_echoes_the_hint_is_retried(tmp_path, monkeypatch, capsys):
+    hint = make_subs.load_glossary({})["prompt_hint"]
+    echo = _asr_of(("คลิปพูดภาษาไทย", 0, 900), ("เรื่องธุรกิจ", 900, 1700), ("การขาย การตลาด", 1700, 2600))
+    prompts = _fake_asr(monkeypatch, [echo, mini()])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 3), hint) == mini()
+    assert prompts == [hint, None] and "คำใบ้" in capsys.readouterr().out
+
+
 def test_review_without_problems_says_so(tmp_path):
     a = mini()
     a["transcription"] = [a["transcription"][0]]          # first sentence only: no gap, no stall, no glossary term
@@ -812,6 +859,88 @@ def test_rerun_skips_done_steps_and_never_touches_edits(tmp_path, fake_asr):
     assert (out / "edits.json").read_bytes() == before
 
 
+def _recut(src, dst, secs):
+    """A shorter cut of `src` written over `dst` (same name: what a re-render of roughcut.mp4 does)."""
+    tmp = dst.with_name("ตัดใหม่.part.mp4")
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(src), "-t", str(secs), "-c", "copy", str(tmp)], check=True)
+    os.replace(tmp, dst)
+
+
+def _wav_secs(p):
+    with wave.open(str(p)) as w:
+        return w.getnframes() / w.getframerate()
+
+
+@needs_ffmpeg
+def test_rerun_after_the_clip_was_recut_redoes_audio_and_asr_but_keeps_edits(tmp_path, fake_asr, capsys):
+    video = tmp_path / "roughcut.mp4"
+    shutil.copy(VIDEO, video)
+    out = tmp_path / "ซับ"
+    assert cli.main([str(video), "-o", str(out)]) == 0
+    assert json.loads((out / "source.json").read_text(encoding="utf-8"))["size"] == video.stat().st_size
+    write_edits(out, {"notes": "งานของฉัน อย่าลบ"})
+    edits = (out / "edits.json").read_bytes()
+    (out / "asr.before-patch.json").write_text("{}", encoding="utf-8")     # a patch backup of the old cut
+    assert _wav_secs(out / "audio.wav") == pytest.approx(21.6, abs=0.1)
+
+    _recut(VIDEO, video, 10)                                                # render --force: same name, new cut
+    capsys.readouterr()
+    assert cli.main([str(video), "-o", str(out)]) == 0
+    said = capsys.readouterr().out
+    assert len(fake_asr) == 2                                               # transcribed again, unasked
+    assert "เปลี่ยน" in said and "edits.json" in said                       # says why, in Thai
+    assert _wav_secs(out / "audio.wav") == pytest.approx(10, abs=0.1)       # audio comes from the new cut
+    assert (out / "edits.json").read_bytes() == edits                       # the user's edits are never touched
+    assert not (out / "asr.before-patch.json").exists()                     # that backup belonged to the old cut
+    assert json.loads((out / "source.json").read_text(encoding="utf-8"))["size"] == video.stat().st_size
+
+    capsys.readouterr()
+    assert cli.main([str(video), "-o", str(out)]) == 0                      # and now it is current again: skip
+    assert len(fake_asr) == 2 and "เปลี่ยน" not in capsys.readouterr().out
+
+
+@needs_ffmpeg
+def test_a_touched_clip_of_the_same_size_counts_as_changed(tmp_path, fake_asr):
+    video = tmp_path / "v.mp4"
+    shutil.copy(VIDEO, video)
+    out = tmp_path / "out"
+    cli.main([str(video), "-o", str(out)])
+    st = video.stat()
+    os.utime(video, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    cli.main([str(video), "-o", str(out)])
+    assert len(fake_asr) == 2
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("video_newer, redo", [(True, True), (False, False)])
+def test_a_folder_from_before_the_stamp_compares_file_times(tmp_path, fake_asr, video_newer, redo):
+    video = tmp_path / "v.mp4"
+    shutil.copy(VIDEO, video)
+    out = tmp_path / "out"
+    cli.main([str(video), "-o", str(out)])
+    (out / "source.json").unlink()                                          # what an older kit left behind
+    made = (out / "audio.wav").stat().st_mtime_ns
+    shift = 60_000_000_000 * (1 if video_newer else -1)
+    os.utime(video, ns=(made + shift, made + shift))
+    cli.main([str(video), "-o", str(out)])
+    assert len(fake_asr) == (2 if redo else 1)
+    assert (out / "source.json").is_file()                                  # stamped from now on
+
+
+@needs_ffmpeg
+def test_a_recut_whose_transcription_fails_is_not_left_on_the_old_asr(tmp_path, monkeypatch, capsys):
+    video = tmp_path / "roughcut.mp4"
+    shutil.copy(VIDEO, video)
+    out = tmp_path / "out"
+    prompts = _fake_asr(monkeypatch, [mini(), EMPTY, EMPTY, mini()])
+    assert cli.main([str(video), "-o", str(out)]) == 0
+    _recut(VIDEO, video, 10)
+    assert cli.main([str(video), "-o", str(out)]) == 2                      # the new cut: no words (prompted + retry)
+    assert not (out / "asr.json").exists()                                  # the old cut's asr.json is gone, not reused
+    assert cli.main([str(video), "-o", str(out)]) == 0                      # next run transcribes the new cut
+    assert len(prompts) == 4
+
+
 @needs_ffmpeg
 def test_rerun_after_asr_json_was_deleted_rebuilds_the_raw_cues(tmp_path, monkeypatch):
     video = tmp_path / "v.mp4"
@@ -920,6 +1049,80 @@ def test_empty_result_without_a_prompt_is_an_error_without_a_retry(monkeypatch):
     with pytest.raises(kit.KitError):
         cli._transcribe(Path("x.wav"), None)
     assert prompts == [None]
+
+
+def _asr_of(*words):
+    """[(text, from_ms, to_ms), ...] -> a one-segment ASR result."""
+    return {"transcription": [{"offsets": {"from": words[0][1], "to": words[-1][2]}, "text": "".join(w[0] for w in words),
+                               "tokens": [{"text": t, "offsets": {"from": a, "to": b}} for t, a, b in words]}]}
+
+
+def _silent_wav(path, secs):
+    _write_wav(path, [(secs, 0)])
+    return path
+
+
+def test_a_single_prompted_word_is_retried_without_the_prompt(tmp_path, monkeypatch, capsys):
+    one = _asr_of(("ครับ", 500, 900))
+    prompts = _fake_asr(monkeypatch, [one, mini()])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 20), "คำใบ้") == mini()
+    assert prompts == ["คำใบ้", None]
+    assert "คำเดียว" in capsys.readouterr().out
+
+
+def test_a_stalled_prompted_result_is_retried_without_the_prompt(tmp_path, monkeypatch, capsys):
+    """Windows CI smoke (faster-whisper base + the Thai hint): one word stretched over 14 s of a 17 s clip."""
+    stalled = _asr_of(("และ", 300, 600), ("นี่", 600, 14600), ("คือ", 14600, 14900))
+    prompts = _fake_asr(monkeypatch, [stalled, mini()])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 17), "คำใบ้") == mini()
+    assert prompts == ["คำใบ้", None]
+    out = capsys.readouterr().out
+    assert "ไม่ใส่คำใบ้" in out and "นี่" in out and "14.0" in out
+
+
+def test_without_a_readable_wav_the_stall_check_uses_the_transcription_span(monkeypatch):
+    stalled = _asr_of(("และ", 0, 300), ("นี่", 300, 9000), ("คือ", 9000, 9400))
+    prompts = _fake_asr(monkeypatch, [stalled, mini()])
+    assert cli._transcribe(Path("ไม่มีไฟล์.wav"), "คำใบ้") == mini()
+    assert prompts == ["คำใบ้", None]
+
+
+@pytest.mark.parametrize("words, secs", [
+    ([("ยาว", 0, 3000)] + [(f"ค{i}", 3000 + i * 300, 3300 + i * 300) for i in range(30)], 20),   # 3 s word, not half of 20 s
+    ([("สั้น", 0, 2400), ("จบ", 2400, 2600)], 3.0),                                              # over half of 3 s, but 2.4 s
+])
+def test_a_long_word_that_is_not_a_stall_is_kept(tmp_path, monkeypatch, capsys, words, secs):
+    good = _asr_of(*words)
+    prompts = _fake_asr(monkeypatch, [good, mini()])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", secs), "คำใบ้") == good
+    assert prompts == ["คำใบ้"] and "ไม่ใส่คำใบ้" not in capsys.readouterr().out
+
+
+def test_a_weak_prompted_result_is_kept_when_the_retry_hears_nothing(tmp_path, monkeypatch):
+    one = _asr_of(("ครับ", 500, 900))
+    prompts = _fake_asr(monkeypatch, [one, EMPTY])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 2), "คำใบ้") == one
+    assert prompts == ["คำใบ้", None]
+
+
+def test_a_weak_result_without_a_prompt_is_not_retried(tmp_path, monkeypatch):
+    one = _asr_of(("ครับ", 500, 900))
+    prompts = _fake_asr(monkeypatch, [one, mini()])
+    assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 2), None) == one
+    assert prompts == [None]
+
+
+@needs_ffmpeg
+def test_patch_retries_a_stalled_prompted_stretch(tmp_path, monkeypatch, capsys):
+    d = make_work(tmp_path)
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=30",
+                    "-ac", "1", "-ar", "16000", str(d / "audio.wav")], check=True)
+    stalled = _asr_of(("ท่อน", 0, 300), ("ค้าง", 300, 6500))
+    fixed = _asr_of(("ท่อน", 0, 700), ("ใหม่", 700, 1500))
+    prompts = _fake_asr(monkeypatch, [stalled, fixed])
+    assert cli.main(["patch", str(d), "--from", "13", "--to", "20", "--no-snap"]) == 0
+    assert prompts[0] and prompts[1] is None
+    assert any("ท่อนใหม่" in c["t"] for c in raw_cues(d))
 
 
 @needs_ffmpeg

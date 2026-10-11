@@ -349,14 +349,48 @@ def test_transcribe_returns_whisper_cpp_shape(media, fake_model):
     assert d["transcription"][2]["tokens"] == [{"text": "เงียบ", "offsets": {"from": 3500, "to": 4000}}]
 
 
-def test_transcribe_passes_the_exact_whisper_settings(media, fake_model):
+WHOLE_CLIP = dict(language="th", word_timestamps=True, vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
+                  beam_size=5)
+NO_FILTERS = dict(no_speech_threshold=None, log_prob_threshold=None)
+
+
+@pytest.mark.parametrize("name", ["large-v3", "large"])          # faster-whisper's "large" is large-v3
+def test_transcribe_passes_the_exact_whisper_settings(media, fake_model, monkeypatch, name):
+    monkeypatch.setenv("TAD_CLIP_MODEL", name)
     asr.transcribe(media, prompt="ชื่อ Black Pan")
     audio, kw = fake_model.calls[0]
-    assert kw == dict(language="th", word_timestamps=True, vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
-                      beam_size=5, initial_prompt="ชื่อ Black Pan")
+    assert kw == dict(**WHOLE_CLIP, initial_prompt="ชื่อ Black Pan")   # large-v3: faster-whisper's own filters, untouched
     # ffmpeg extracted 16 kHz mono; the array (not a path) is handed to the model
     assert isinstance(audio, np.ndarray) and audio.dtype == np.float32
     assert len(audio) / SR == pytest.approx(2.0, abs=0.15)
+
+
+@pytest.mark.parametrize("name", ["base", "small", "medium", "large-v3-turbo", "tiny"])
+def test_models_other_than_large_v3_keep_their_low_confidence_segments(media, fake_model, monkeypatch, name):
+    """Measured on the Thai fixture (CPU int8): base, small and medium return 0 segments with faster-whisper's default
+    no-speech / log-prob filters, VAD on or off; with both filters off medium gives good Thai and base Thai-ish text."""
+    monkeypatch.setenv("TAD_CLIP_MODEL", name)
+    asr.transcribe(media, prompt="คำใบ้")
+    # smaller models also run without the Thai hint (medium + hint = mixed-script garbage on the fixture)
+    assert fake_model.calls[0][1] == dict(**WHOLE_CLIP, initial_prompt=None, **NO_FILTERS)
+
+
+@pytest.mark.parametrize("name, extra", [("large-v3", {}), ("medium", NO_FILTERS), ("base", NO_FILTERS)])
+def test_per_phrase_runs_follow_the_same_model_rule(tmp_path, monkeypatch, name, extra):
+    monkeypatch.setenv("TAD_CLIP_MODEL", name)
+    m = FakeModel(texts=["x"])
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: m)
+    asr.transcribe_many([make_wav(tmp_path / "ก.wav")])
+    assert m.calls[0][1] == dict(language="th", beam_size=5, condition_on_previous_text=False, vad_filter=False,
+                                 initial_prompt=None, **extra)
+
+
+def test_the_model_rule_reads_the_model_name_the_run_uses(monkeypatch, isolated_home):
+    kit.save_config({**kit.load_config(), "whisper": {"model": "medium"}})
+    assert asr.decode_filters() == NO_FILTERS
+    monkeypatch.setenv("TAD_CLIP_MODEL", "large-v3")                 # env beats config, as everywhere else
+    assert asr.decode_filters() == {}
+    assert asr.decode_filters("base") == NO_FILTERS and asr.decode_filters(" Large-V3 ") == {}
 
 
 def test_transcribe_prompt_defaults_to_none(media, fake_model):
@@ -881,9 +915,33 @@ def test_real_model_output_passes_the_schema(monkeypatch):
     asr._load_cached.cache_clear()
     d = asr.transcribe(FIXTURE)
     assert_ojf_schema(d)   # also proves every faster-whisper keyword we pass exists in the installed version
-    if model not in {"tiny", "base", "small"}:  # the small models often hear nothing at all in this Thai clip
-        text = "".join(s["text"] for s in d["transcription"])
-        assert any("\u0e00" <= c <= "\u0e7f" for c in text), f"no Thai text recognised: {text!r}"
+    # every model hears something now: the small ones used to return nothing at all (their low-confidence filters)
+    text = "".join(s["text"] for s in d["transcription"])
+    assert d["transcription"] and sum("\u0e00" <= c <= "\u0e7f" for c in text) >= 3, f"no Thai text recognised: {text!r}"
+
+
+def _have_faster_whisper_model(name):
+    return (kit.models_dir() / f"models--Systran--faster-whisper-{name}").is_dir()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("hint", [False, True])
+def test_real_medium_hears_thai_on_the_fixture(monkeypatch, hint):
+    """The low-RAM choice that setup offers. With faster-whisper's default filters it returned 0 segments here.
+    Measured (CPU int8, seed 1234): without a prompt it hears the sentence ("\u2026\u0e01\u0e23\u0e30\u0e17\u0e30\u0e2a\u0e35\u0e14\u0e33\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e27\u0e32\u0e21\u0e41\u0e15\u0e01\u0e15\u0e48\u0e32\u0e07\u2026");
+    with the kit's Thai hint the text is far worse (half of it other scripts) -- so with the hint only the floor is
+    pinned: segments with Thai in them, never the old 0."""
+    if not _have_faster_whisper_model("medium"):
+        pytest.skip("faster-whisper medium is not in the models folder of TAD_CLIP_HOME")
+    monkeypatch.setenv("TAD_CLIP_MODEL", "medium")
+    asr._load_cached.cache_clear()
+    d = asr.transcribe(FIXTURE, prompt=asr.glossary_prompt() if hint else None)
+    assert_ojf_schema(d)
+    text = "".join(s["text"] for s in d["transcription"])
+    assert len(d["transcription"]) >= 3, d
+    assert sum("\u0e00" <= c <= "\u0e7f" for c in text) >= 20, f"too little Thai: {text!r}"
+    if not hint:
+        assert "\u0e01\u0e23\u0e30\u0e17\u0e30" in text and "\u0e2b\u0e25\u0e31\u0e01\u0e04\u0e34\u0e14" in text, text
 
 
 def _expect_words():
@@ -972,3 +1030,30 @@ def test_same_audio_gives_the_same_text_on_consecutive_calls(monkeypatch, tmp_pa
     monkeypatch.setattr(asr, "_fresh_model", lambda: None)
     loose = ["".join(s["text"] for s in asr.transcribe(clip)["transcription"]) for _ in range(2)]
     assert loose[0] != loose[1], "sampling was not random here, so this test proves nothing"
+
+
+def test_faster_whisper_hint_only_for_large_v3(monkeypatch):
+    """Smaller faster-whisper models get no Thai hint (measured: medium + hint = mixed-script garbage)."""
+    monkeypatch.setenv("TAD_CLIP_MODEL", "medium")
+    assert asr.fw_prompt("คำใบ้") is None
+    monkeypatch.setenv("TAD_CLIP_MODEL", "base")
+    assert asr.fw_prompt("คำใบ้") is None
+    monkeypatch.setenv("TAD_CLIP_MODEL", "large-v3")
+    assert asr.fw_prompt("คำใบ้") == "คำใบ้"
+
+
+def test_faster_whisper_transcribe_drops_hint_for_small_models(monkeypatch, tmp_path):
+    seen = {}
+
+    class Model:
+        def transcribe(self, audio, **kw):
+            seen.update(kw)
+            return iter([]), None
+
+    monkeypatch.setenv("TAD_CLIP_MODEL", "medium")
+    monkeypatch.setattr(asr, "backend_choice", lambda: ("faster-whisper", False))
+    monkeypatch.setattr(asr, "extract_wav", lambda media, wav: Path(wav).write_bytes(b""))
+    monkeypatch.setattr(asr, "_audio_input", lambda wav: [0.0])
+    monkeypatch.setattr(asr, "_run_model", lambda fn: fn(Model()))
+    asr.transcribe(tmp_path / "x.mp4", prompt="คำใบ้")
+    assert seen["initial_prompt"] is None and seen["no_speech_threshold"] is None

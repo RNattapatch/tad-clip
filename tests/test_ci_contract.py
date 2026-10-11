@@ -83,3 +83,23 @@ def test_pull_requests_run_only_from_forks():
 
 def test_model_cache_key_names_the_model_per_backend():
     assert "faster-whisper-base" in CI and "ggml-base" in CI
+
+
+# ---------------------------------------------------------------- skill preamble on Windows (final fix wave)
+PREAMBLE = 'K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"'
+
+
+def _step(name_start):
+    lines = CI.splitlines()
+    i = next(n for n, line in enumerate(lines) if line.strip().startswith(f"- name: {name_start}"))
+    j = next((n for n in range(i + 1, len(lines)) if lines[n].strip().startswith("- name:")), len(lines))
+    return "\n".join(lines[i:j])
+
+
+def test_windows_ci_sources_the_skill_preamble_verbatim_with_a_backslash_root():
+    step = _step("Skill preamble from Git Bash")
+    assert "runner.os == 'Windows'" in step and "shell:" not in step          # default shell = Git Bash
+    assert [line.strip() for line in step.splitlines() if "env.sh" in line and "K=" in line] == [PREAMBLE]
+    assert 'cygpath -w "$GITHUB_WORKSPACE"' in step                           # CLAUDE_PLUGIN_ROOT as C:\…
+    assert '"$FF" -version && "$NODE" --version && ' in step and "doctor.py --quick" in step
+    assert "\\r" in step                                                       # asserts no carriage return survived

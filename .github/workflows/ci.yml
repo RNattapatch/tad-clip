@@ -152,6 +152,22 @@ jobs:
         timeout-minutes: 10
         run: '"$NODE" --test "tests/*.test.mjs"'
 
+      - name: Skill preamble from Git Bash with a backslash plugin root (Windows)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' && runner.os == 'Windows' }}
+        run: |
+          # what Claude Code on Windows hands the SKILL bash blocks: CLAUDE_PLUGIN_ROOT as a C:\… path, python printing CRLF
+          export CLAUDE_PLUGIN_ROOT="$(cygpath -w "$GITHUB_WORKSPACE")"
+          case "$CLAUDE_PLUGIN_ROOT" in *\\*) ;; *) echo "::error::test setup: expected a backslash path, got $CLAUDE_PLUGIN_ROOT"; exit 1 ;; esac
+          cd /
+          # ↓ the first line of every SKILL bash block, verbatim (tests/test_ci_contract.py keeps it identical)
+          K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
+          printf 'K=%s\nKIT=%s\nPWD=%s\nPY=%s\nFF=%s\nNODE=%s\n' "$K" "$KIT" "$PWD" "$PY" "$FF" "$NODE"
+          [ "$K" = "$CLAUDE_PLUGIN_ROOT" ] || { echo "::error::the preamble did not find env.sh under the backslash plugin root"; exit 1; }
+          [ "$KIT" = "$(cygpath -u "$GITHUB_WORKSPACE")" ] && [ "$PWD" = "$KIT" ] || { echo "::error::KIT / working directory is not the kit"; exit 1; }
+          for v in "$PY" "$FF" "$NODE"; do case "$v" in *$'\r'*) echo "::error::carriage return left in $v"; exit 1 ;; esac; done
+          [ "$FF" != ffmpeg ] && [ "$NODE" != node ] || { echo "::error::env.sh fell back to bare ffmpeg/node (kit tools not resolved)"; exit 1; }
+          "$FF" -version && "$NODE" --version && { "$PY" engine/doctor.py --quick || echo "doctor --quick exit $? — rows expected on a CI runner; this step checks the tools above"; }
+
       - name: Probe — faster-whisper model in a Thai + space folder (Windows, info only)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' && runner.os == 'Windows' }}
         continue-on-error: true

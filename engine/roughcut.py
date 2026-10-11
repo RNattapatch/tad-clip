@@ -11,8 +11,10 @@ transcription cached as <out dir>/asr.json.
 drops.json = {"drop": [phrase numbers to remove: retakes / false starts / filler], "gap": 0.30, "split": {"25": 55.21}}
 Kept phrases closer than `gap` s stay joined; longer pauses and dropped phrases are cut out (a little air kept on
 each side). "split" cuts phrase 25 at 55.21 s into 25a/25b (a retake that starts with no pause) -> drop "25b".
-render writes <out> and <out>.segments.json = {"source", "drop", "keep"} (the raw ranges kept).
-Every step skips when its output already exists unless --force, so re-running never clobbers hand edits.
+render writes <out> and <out>.segments.json = {"source", "size", "mtime_ns", "drop", "keep"} (the raw ranges kept).
+Every step skips when its output already exists unless --force, so re-running never clobbers hand edits -- except that
+`phrases` redoes itself for a video re-shot under the same name (size/mtime stamp in <out stem>.source.json, the old
+list kept as <out stem>.previous.json), and `render` refuses to skip onto a roughcut made from another take.
 """
 import argparse
 import functools
@@ -207,11 +209,50 @@ def _print_phrases(rows, heard=False, dur=None):
     print(f"phrases {len(rows)}" + (f" · raw {dur:.1f}s" if dur is not None else ""))
 
 
+def source_stamp(video):
+    """Which take a file was made from: size + mtime of the video (a re-shot or re-rendered clip keeps its name)."""
+    st = Path(video).stat()
+    return {"size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def _same_take(old, video):
+    now = source_stamp(video)
+    return isinstance(old, dict) and (old.get("size"), old.get("mtime_ns")) == (now["size"], now["mtime_ns"])
+
+
+def phrases_stale(video, out, cache):
+    """True when phrases.json / the asr.json cache beside it were made from another take of `video`.
+    <out stem>.source.json holds the stamp; a folder an older kit made without it counts as stale when the video is
+    newer than those files."""
+    made = [p for p in (out, cache) if p.exists()]
+    if not made or not Path(video).is_file():
+        return False
+    stamp = out.with_name(out.stem + ".source.json")
+    if stamp.exists():
+        try:
+            return not _same_take(json.loads(stamp.read_text(encoding="utf-8")), video)
+        except ValueError:
+            pass
+    return source_stamp(video)["mtime_ns"] > min(p.stat().st_mtime_ns for p in made)
+
+
 def run_phrases(video, out, whisper=False, force=False):
     out = Path(out)
+    cache = out.parent / "asr.json"
+    stale = not force and phrases_stale(video, out, cache)
+    if stale:
+        print(f"{Path(video).name} เปลี่ยนไปจากตอนทำ {out.name} (ถ่ายใหม่หรือตัดใหม่ ชื่อเดิม) — หาวลีและถอดเสียงใหม่ให้ "
+              f"· เลขวลีเปลี่ยนแล้ว drops.json เดิมใช้ไม่ได้ ต้องเลือกเทคใหม่ แล้ว render ด้วย --force")
+        cache.unlink(missing_ok=True)                  # that transcript is of the old take
+        if out.exists():                               # may hold hand edits: keep it beside, never lose it
+            backup = out.with_name(out.stem + ".previous.json")
+            os.replace(out, backup)
+            print(f"รายการวลีเดิมเก็บไว้ที่ {backup}")
     if out.exists() and not force:
         print(f"ข้าม — มี {out} อยู่แล้ว (ใช้ --force เพื่อสร้างใหม่ เช่นตอนเปลี่ยนมาใช้ --whisper) รายการเดิม:")
         _print_phrases(_read_json(out, " ใช้ --force เพื่อสร้างใหม่"))
+        if Path(video).is_file() and not out.with_name(out.stem + ".source.json").exists():
+            asr.write_json_atomic(out.with_name(out.stem + ".source.json"), source_stamp(video))   # older kit: stamp now
         return 0
     ph, dur = phrases(video)
     prompt = asr.glossary_prompt()
@@ -220,7 +261,6 @@ def run_phrases(video, out, whisper=False, force=False):
         heard = per_phrase_asr(video, ph)   # no hint here: on 0.1 s phrases faster-whisper echoes it back (whisper.cpp -mc 0 ignores it)
         texts = [heard.get(i, "") for i in range(len(ph))]
     else:
-        cache = out.parent / "asr.json"
         if cache.exists() and not force:
             data = _read_json(cache, " ใช้ --force เพื่อถอดเสียงใหม่")
         else:
@@ -233,6 +273,7 @@ def run_phrases(video, out, whisper=False, force=False):
              "gap": round(ph[i + 1][0] - e, 3) if i + 1 < len(ph) else 0}
             for i, (s, e) in enumerate(ph)]
     asr.write_text_atomic(out, "[\n" + ",\n".join("  " + json.dumps(r, ensure_ascii=False) for r in rows) + "\n]\n")  # one phrase per line
+    asr.write_json_atomic(out.with_name(out.stem + ".source.json"), source_stamp(video))
     _print_phrases(rows, heard=whisper, dur=dur)
     return 0
 
@@ -335,6 +376,14 @@ def _remove(path):
 def render(video, drops, out, force=False):
     out = Path(out)
     if out.exists() and not force:
+        try:
+            seg = json.loads(Path(str(out) + ".segments.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            seg = None
+        if isinstance(seg, dict) and "size" in seg and Path(video).is_file() and not _same_take(seg, video):
+            # a take re-shot under the same name: skipping would hand the next steps a cut of the old take
+            raise KitError(f"{Path(video).name} เปลี่ยนไปจากตอนทำ {out.name} (ถ่ายใหม่หรือตัดใหม่ ชื่อเดิม) — "
+                           f"หาวลีใหม่ (phrases) เลือกเทคใน drops.json ใหม่ แล้วสั่ง render ซ้ำด้วย --force")
         print(f"ข้าม — มี {out} อยู่แล้ว (ใช้ --force เพื่อ render ใหม่)")
         return 0
     _need_file(video)
@@ -358,7 +407,7 @@ def render(video, drops, out, force=False):
              "-r", source_fps(info), "-fps_mode", "cfr",
              "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", part])
-        seg = {"source": str(Path(video).resolve()), "drop": [str(d) for d in spec.get("drop") or []],
+        seg = {"source": str(Path(video).resolve()), **source_stamp(video), "drop": [str(d) for d in spec.get("drop") or []],
                "keep": [[round(s, 3), round(e, 3)] for s, e in keep]}
         asr.write_json_atomic(Path(str(out) + ".segments.json"), seg, indent=None)
         os.replace(part, out)
