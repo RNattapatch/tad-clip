@@ -40,6 +40,19 @@
 
 ## เริ่มใช้ 3 ขั้น
 
+**ทางลัด: ให้ Claude ติดตั้งให้** คัดลอกข้อความนี้ไปวางในแชทแท็บ Code แล้วกด Enter ถ้าขึ้นขออนุญาตรันคำสั่ง กด Allow
+
+```text
+ช่วยติดตั้ง plugin tad-clip จาก https://github.com/RNattapatch/tad-clip ให้หน่อย
+รัน 2 คำสั่งนี้ทีละคำสั่ง ถ้าเครื่องไม่มีคำสั่ง claude ให้ใช้ไฟล์ในตัวแปร CLAUDE_CODE_EXECPATH แทน
+claude plugin marketplace add RNattapatch/tad-clip
+claude plugin install tad-clip@pun-nattapatch
+เสร็จแล้วบอกฉันว่าต้องทำอะไรต่อ
+```
+
+เสร็จแล้วเปิดแชทใหม่ แล้วข้ามไปขั้นที่ 2 ได้เลย ถ้าอยากกดเอง ทำตามขั้นที่ 1 ข้างล่าง
+
+
 1. เพิ่ม plugin ในแอป Claude แท็บ Code: กด **+ → Plugins → Add plugin** แล้วใส่ `RNattapatch/tad-clip` หรือพิมพ์สองบรรทัดนี้ในช่องแชททีละบรรทัด
 
    ```text
@@ -78,3 +91,8 @@
 ## คนทำ
 
 ผม ปัน ณัฐพัชร์ [@pun_nattapatch](https://punnattapatch.com/free/tad-clip?utm_source=github&utm_medium=readme_footer&utm_campaign=tad-clip) ถ้าลองแล้วติดตรงไหน เปิด [Issue](https://github.com/RNattapatch/tad-clip/issues) ได้เลยครับ บอกด้วยว่าใช้ Mac หรือ Windows และติดอยู่ขั้นไหน ผมจะได้ดูถูกจุด
+
+## For AI agents installing this repo
+
+1. Run `claude plugin marketplace add RNattapatch/tad-clip`, then `claude plugin install tad-clip@pun-nattapatch`. If `claude` is not on PATH (Claude desktop app only), run the same commands with the executable in `$CLAUDE_CODE_EXECPATH`.
+2. Tell the user to open a new chat (plugins load in a new session) and type `ติดตั้ง tad-clip`; the `tad-clip-setup` skill installs the tools.
