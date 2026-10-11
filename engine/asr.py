@@ -17,6 +17,7 @@ Run from the kit root. ffmpeg decodes every input (video or audio, any format) t
 import argparse
 import codecs
 import functools
+import gc
 import json
 import os
 import subprocess
@@ -33,6 +34,7 @@ except ImportError:  # started as a plain script instead of `python -m engine.as
 
 KitError = kit.KitError
 SR = 16000
+SEED = 1234   # faster-whisper's temperature fallback samples; a fixed seed makes the same audio give the same text
 
 CPP_NAMES = {"whispercpp", "whisper.cpp", "whisper-cpp", "cpp"}
 FW_NAMES = {"faster-whisper", "fasterwhisper", "faster_whisper", "faster"}
@@ -201,8 +203,32 @@ def load_model(model=None):
         return _load_cached(name, "cpu", "int8", root)
 
 
+def _seed():
+    """Fixed seed for ctranslate2's sampler (a no-op on a ctranslate2 that lacks the function)."""
+    try:
+        import ctranslate2
+        set_seed = getattr(ctranslate2, "set_random_seed", None)
+    except ImportError:
+        return
+    if set_seed is not None:
+        set_seed(SEED)
+
+
+def _fresh_model():
+    """Forget the cached model so the next load_model() builds a new one.
+
+    ctranslate2 keeps its random generator per worker thread and reads the seed only when that worker first samples:
+    on a long-lived model a later set_random_seed() changes nothing and consecutive calls drift apart (measured:
+    seeding before each of three calls on one model gave three different texts; a new model per call gave three equal
+    ones). Loading costs about 0.1 s for `base` and 4 s for `large-v3` on a CPU, small next to the transcription."""
+    _load_cached.cache_clear()
+    gc.collect()   # release the old weights before the new ones load (8 GB machines)
+
+
 def _run_model(fn):
-    """fn(model) with the model from load_model(); a CUDA failure during inference reloads on the CPU once."""
+    """fn(model) with a fresh model from load_model(); a CUDA failure during inference reloads on the CPU once.
+    fn() calls _seed() right before each model.transcribe()."""
+    _fresh_model()
     model = load_model()
     try:
         return fn(model)
@@ -357,6 +383,7 @@ def transcribe(path, prompt=None) -> dict:
         audio = _audio_input(wav)
 
         def run(model):
+            _seed()
             segments, _ = model.transcribe(audio, language="th", word_timestamps=True, vad_filter=True,
                                            vad_parameters={"min_silence_duration_ms": 500}, beam_size=5,
                                            initial_prompt=prompt)
@@ -381,6 +408,7 @@ def transcribe_many(wav_paths, prompt=None) -> list:
     def run(model):
         out = []
         for p in paths:
+            _seed()
             segments, _ = model.transcribe(_audio_input(Path(p)), language="th", beam_size=5,
                                            condition_on_previous_text=False, vad_filter=False, initial_prompt=prompt)
             out.append(" ".join(t for t in (s.text.strip() for s in segments) if t))

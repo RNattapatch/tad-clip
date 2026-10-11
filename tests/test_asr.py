@@ -801,6 +801,76 @@ def test_every_ffmpeg_call_has_nostdin(media, fake_model, monkeypatch):
     assert ff and all("-nostdin" in c for c in ff)
 
 
+# ---------------------------------------------------------------- determinism (fixed seed)
+
+@pytest.fixture
+def seed_log(monkeypatch):
+    """Records ctranslate2.set_random_seed calls and model.transcribe calls in one ordered list."""
+    import ctranslate2
+    events = []
+    monkeypatch.setattr(ctranslate2, "set_random_seed", lambda s: events.append(("seed", s)))
+    return events
+
+
+class LoggingModel(FakeModel):
+    def __init__(self, events, **kw):
+        super().__init__(**kw)
+        self.events = events
+
+    def transcribe(self, audio, **kw):
+        self.events.append("transcribe")
+        return super().transcribe(audio, **kw)
+
+
+def test_seed_is_set_before_every_whole_clip_call(media, seed_log, monkeypatch):
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: LoggingModel(seed_log))
+    asr.transcribe(media)
+    asr.transcribe(media)
+    assert seed_log == [("seed", asr.SEED), "transcribe"] * 2
+
+
+def test_seed_is_set_before_every_per_phrase_call(tmp_path, seed_log, monkeypatch):
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: LoggingModel(seed_log, texts=["a", "b", "c"]))
+    asr.transcribe_many([make_wav(tmp_path / f"p{i}.wav", 0.5) for i in range(3)])
+    assert seed_log == [("seed", asr.SEED), "transcribe"] * 3
+
+
+def test_seed_is_one_constant(media, seed_log, monkeypatch):
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: LoggingModel(seed_log))
+    asr.transcribe(media)
+    asr.transcribe(media)
+    assert len({e for e in seed_log if e != "transcribe"}) == 1
+
+
+def test_a_ctranslate2_without_set_random_seed_still_works(media, fake_model, monkeypatch):
+    import ctranslate2
+    monkeypatch.delattr(ctranslate2, "set_random_seed", raising=False)
+    assert_ojf_schema(asr.transcribe(media))
+
+
+def test_each_call_starts_on_a_fresh_model_so_the_seed_takes_effect(media, monkeypatch, isolated_home):
+    """ctranslate2 keeps its random generator per worker thread and only reads the seed when that worker first
+    samples, so a later set_random_seed() on a long-lived model changes nothing. A model per call is what makes the
+    same input give the same output (see Fix round 3 in the report)."""
+    import faster_whisper
+    _cuda(monkeypatch, 0)
+    RecorderModel.instances = []
+    good = FakeModel()
+
+    class Counting(RecorderModel):
+        def transcribe(self, audio, **kw):
+            return good.transcribe(audio, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Counting)
+    asr.transcribe(media)
+    asr.transcribe(media)
+    assert len(RecorderModel.instances) == 2
+    good.texts = ["x", "y", "z"]
+    asr.transcribe_many([media])                     # a batch is one call: one model for all its phrases
+    assert len(RecorderModel.instances) == 3
+    assert asr.load_model() is RecorderModel.instances[2]    # and load_model() still hands out the cached one
+
+
 # ---------------------------------------------------------------- real model (slow)
 
 @pytest.mark.slow
@@ -865,3 +935,40 @@ def test_real_whispercpp_per_phrase(monkeypatch, tmp_path):
     assert len(texts) == 2, texts
     for t in texts:
         _assert_thai(t, "ผลจาก")
+
+
+class Sampling:
+    """Worst case for determinism: every window is decoded by sampling (temperature 1), the thing the temperature
+    fallback does on hard audio. Wraps the real model; only this test changes a decode option."""
+    def __init__(self, real):
+        self.real = real
+
+    def transcribe(self, audio, **kw):
+        return self.real.transcribe(audio, **{**kw, "temperature": 1.0, "beam_size": 1})
+
+
+def _excerpt(tmp_path):
+    out = tmp_path / "ตัวอย่าง สั้น.wav"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-ss", "5", "-t", "4.5", "-i", FIXTURE, "-vn", "-ac", "1",
+             "-ar", "16000", out])
+    return out
+
+
+@pytest.mark.slow
+def test_same_audio_gives_the_same_text_on_consecutive_calls(monkeypatch, tmp_path):
+    import os
+    monkeypatch.setenv("TAD_CLIP_MODEL", os.environ.get("TAD_CLIP_TEST_MODEL", "base"))
+    asr._load_cached.cache_clear()
+    clip = _excerpt(tmp_path)
+    texts = ["".join(s["text"] for s in asr.transcribe(clip)["transcription"]) for _ in range(2)]
+    assert texts[0] == texts[1]
+    # the plain decode options (nothing forced): same again
+    real_load = asr.load_model
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: Sampling(real_load(*a, **k)))
+    sampled = ["".join(s["text"] for s in asr.transcribe(clip)["transcription"]) for _ in range(2)]
+    assert sampled[0] == sampled[1] and sampled[0].strip(), sampled
+    # ...and the check has teeth: without the seed + fresh model the two sampled runs really do differ
+    monkeypatch.setattr(asr, "_seed", lambda: None)
+    monkeypatch.setattr(asr, "_fresh_model", lambda: None)
+    loose = ["".join(s["text"] for s in asr.transcribe(clip)["transcription"]) for _ in range(2)]
+    assert loose[0] != loose[1], "sampling was not random here, so this test proves nothing"
