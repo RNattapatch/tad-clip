@@ -279,14 +279,23 @@ def test_config_update_keeps_preset_switchable():
     assert kit.load_config()["brand"]["colors"]["accent"] == "#f97316"
 
 
-def test_default_model_respects_config_then_ram(monkeypatch):
-    monkeypatch.setattr(inst, "ram_bytes", lambda: 16 * 1024 ** 3)
+@pytest.mark.parametrize("ram_gib", [16, 8, 7, 4, 2])
+def test_default_model_is_large_v3_whatever_the_ram(monkeypatch, ram_gib):
+    """medium's Thai varies a lot by CPU (one run 8 good segments, the next a mixed-script one), so a small machine
+    still gets large-v3 (int8 needs ~3 GB RAM); medium is only ever an explicit choice."""
+    monkeypatch.setattr(inst, "ram_bytes", lambda: ram_gib * 1024 ** 3)
     assert setup.choose_model(None) == "large-v3"
+    assert setup.DEFAULT_MODEL == "large-v3"
+
+
+def test_default_model_respects_explicit_arg_then_config(monkeypatch):
     monkeypatch.setattr(inst, "ram_bytes", lambda: 4 * 1024 ** 3)
-    assert setup.choose_model(None) == "medium"
-    kit.save_config({"whisper": {"model": "medium"}})
-    assert setup.choose_model(None) == "medium"
+    assert setup.choose_model("medium") == "medium"       # --model medium stays available
     assert setup.choose_model("base") == "base"
+    kit.save_config({"whisper": {"model": "medium"}})
+    assert setup.choose_model(None) == "medium"           # a model the user already chose is kept
+    assert setup.choose_model("large-v3") == "large-v3"   # and the argument beats the config
+    assert "medium" in setup.MODELS
 
 
 def test_plan_lists_sizes_and_total(monkeypatch):

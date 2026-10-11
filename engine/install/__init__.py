@@ -417,9 +417,6 @@ def free_bytes(path) -> int:
     return shutil.disk_usage(str(p)).free
 
 
-LIGHT_MODEL = "medium"   # what to offer a low-RAM machine
-
-
 def low_ram(ram: int | None) -> bool:
     # an "8 GB" Windows laptop reports ~7.8 GiB after hardware reservations → 7.5 GiB is the line
     return ram is not None and ram < 7.5 * 1024 ** 3

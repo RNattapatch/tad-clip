@@ -928,29 +928,26 @@ def _have_faster_whisper_model(name):
 @pytest.mark.slow
 @pytest.mark.parametrize("hint", [False, True])
 def test_real_medium_hears_thai_on_the_fixture(monkeypatch, hint):
-    """The low-RAM choice that setup offers. With faster-whisper's default filters it returned 0 segments here.
-    Measured (CPU int8, seed 1234): without a prompt it hears the sentence ("\u2026\u0e01\u0e23\u0e30\u0e17\u0e30\u0e2a\u0e35\u0e14\u0e33\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e27\u0e32\u0e21\u0e41\u0e15\u0e01\u0e15\u0e48\u0e32\u0e07\u2026");
-    with the kit's Thai hint the text is far worse (half of it other scripts) -- so with the hint only the floor is
-    pinned: segments with Thai in them, never the old 0."""
+    """Floor check for the explicit `--model medium` choice (a last resort: setup never picks it by itself).
+    medium's Thai is NOT stable. With the same fixed seed, one Windows CI run gave 8 good segments and the next gave a
+    single mixed-script one ("... and Hey, the"); the text differs by CPU, and with the kit's Thai hint it is worse
+    still. With faster-whisper's default filters it once returned 0 segments here. So only the floor is pinned, for
+    both prompt variants: the call succeeds, the result matches the schema, and at least one segment has Thai
+    characters in it. No segment count and no key words -- either would flake from one CPU to the next."""
     if not _have_faster_whisper_model("medium"):
         pytest.skip("faster-whisper medium is not in the models folder of TAD_CLIP_HOME")
     monkeypatch.setenv("TAD_CLIP_MODEL", "medium")
     asr._load_cached.cache_clear()
     d = asr.transcribe(FIXTURE, prompt=asr.glossary_prompt() if hint else None)
     assert_ojf_schema(d)
-    text = "".join(s["text"] for s in d["transcription"])
-    assert len(d["transcription"]) >= 3, d
-    assert sum("\u0e00" <= c <= "\u0e7f" for c in text) >= 20, f"too little Thai: {text!r}"
-    if not hint:
-        # the exact spelling differs by CPU (Windows CI heard "กระทับ" for "กระทะ"); require at least 2 key words
-        keys = ["\u0e01\u0e23\u0e30\u0e17\u0e30", "\u0e2b\u0e25\u0e31\u0e01\u0e04\u0e34\u0e14", "\u0e2a\u0e35\u0e14\u0e33",
-                "\u0e25\u0e39\u0e01\u0e04\u0e49\u0e32", "\u0e04\u0e27\u0e32\u0e21\u0e41\u0e15\u0e01\u0e15\u0e48\u0e32\u0e07"]   # กระทะ หลักคิด สีดำ ลูกค้า ความแตกต่าง
-        assert sum(k in text for k in keys) >= 2, text
+    thai = [s for s in d["transcription"] if any("\u0e00" <= c <= "\u0e7f" for c in s["text"])]
+    assert thai, f"no segment with Thai characters: {d['transcription']!r}"
 
 
 def _expect_words():
-    """Exact Thai words only hold for the big models; CI runs `base`, which only has to produce Thai script."""
-    return any(k in asr.model_name() for k in ("large", "medium"))
+    """Exact Thai words only hold for large-v3 (medium's Thai varies by CPU, so it only has to produce Thai script,
+    like `base`, which macOS CI runs)."""
+    return "large" in asr.model_name()
 
 
 def _assert_thai(text, word):

@@ -79,7 +79,7 @@ def choose_model(arg) -> str:
         return configured
     if configured:
         say(f"⚠️ โมเดล {configured} ในไฟล์ตั้งค่าไม่อยู่ในชุดที่รองรับ ({' · '.join(MODELS)}) — ใช้ค่าเริ่มต้นแทน")
-    return inst.LIGHT_MODEL if inst.low_ram(inst.ram_bytes()) else DEFAULT_MODEL
+    return DEFAULT_MODEL   # never medium for low RAM: its Thai varies a lot by machine (large-v3 int8 needs ~3 GB RAM)
 
 
 def update_config(tools: dict, model: str, device: str = None) -> None:
@@ -298,7 +298,7 @@ def main(argv=None) -> int:
     ap.add_argument("--yes", action="store_true", help="ติดตั้งเลยไม่ต้องถาม")
     ap.add_argument("--with-cutout", action="store_true", help="ติดตั้งตัวตัดพื้นหลัง transparent-background เพิ่ม")
     ap.add_argument("--no-cuda", action="store_true", help="ไม่ใช้การ์ดจอ NVIDIA ถอดเสียง (Windows)")
-    ap.add_argument("--model", choices=MODELS, help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 · เครื่อง RAM น้อยกว่า 8 GB ใช้ medium)")
+    ap.add_argument("--model", choices=MODELS, help="โมเดลถอดเสียง (ค่าเริ่มต้น large-v3 ทุกเครื่อง · medium ไว้เป็นทางสุดท้าย ฟังภาษาไทยพลาดมาก)")
     a = ap.parse_args(argv)
 
     osn = inst.os_name()

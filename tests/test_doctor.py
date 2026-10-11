@@ -159,7 +159,25 @@ def test_model_present_is_green(fw):
 def test_medium_model_maps_to_its_repo(fw):
     kit.save_config({"whisper": {"model": "medium"}})
     _fake_model(kit.models_dir(), "models--Systran--faster-whisper-medium")
-    assert doctor.check_model()["status"] == "ok"
+    c = doctor.check_model()
+    assert c["status"] == "warn" and "faster-whisper-medium" in c["detail"]    # found (not red) but flagged
+
+
+def test_medium_model_warns_that_thai_is_noticeably_worse(fw):
+    kit.save_config({"whisper": {"model": "medium"}})
+    _fake_model(kit.models_dir(), "models--Systran--faster-whisper-medium")
+    c = doctor.check_model()
+    assert c["status"] == "warn"
+    assert "ภาษาไทย" in c["detail"] and "large-v3" in c["detail"] and "ทางสุดท้าย" in c["detail"]
+    assert "--model large-v3" in c["fix"]                  # the way back
+    assert doctor.ICON[c["status"]] in ("⚠️", "ℹ️")
+
+
+def test_large_v3_model_has_no_thai_note(fw):
+    kit.save_config({"whisper": {"model": "large-v3"}})
+    _fake_model(kit.models_dir(), "models--Systran--faster-whisper-large-v3")
+    c = doctor.check_model()
+    assert c["status"] == "ok" and "ภาษาไทยแม่นน้อยกว่า" not in c["detail"]
 
 
 def test_half_downloaded_model_is_red_with_model_in_fix(fw):
@@ -207,6 +225,13 @@ def test_whispercpp_model_cut_short_is_red(wcpp):
     c = doctor.check_model()
     assert c["status"] == "fail"
     assert "ไม่ครบ" in c["detail"] and "--model large-v3" in c["fix"]
+
+
+def test_whispercpp_medium_present_gets_the_same_thai_warning(wcpp):
+    kit.save_config({"whisper": {"model": "medium"}})
+    _ggml("medium")
+    c = doctor.check_model()
+    assert c["status"] == "warn" and "ภาษาไทย" in c["detail"] and "--model large-v3" in c["fix"]
 
 
 def test_whispercpp_model_missing_is_red(wcpp):
@@ -273,12 +298,21 @@ def test_no_browser_at_all_is_red(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- machine
-def test_low_ram_warns_and_suggests_medium(monkeypatch):
+def test_low_ram_keeps_large_v3_and_says_close_other_apps(monkeypatch):
     monkeypatch.setattr(inst, "ram_bytes", lambda: 4 * 1024 ** 3)
+    kit.save_config({"whisper": {"model": "large-v3"}})
     c = doctor.check_ram()
     assert c["status"] == "warn"
-    assert "--model medium" in c["fix"]
+    assert "large-v3" in c["detail"] and "ปิดโปรแกรมอื่น" in c["detail"]
+    assert "ปิดโปรแกรมอื่น" in c["fix"] and "--model" not in c["fix"]    # the fix is no longer "switch to medium"
+    # medium is named only as the last resort, with the Thai cost
+    assert "ทางสุดท้าย" in c["detail"] and "--model medium" in c["detail"] and "ภาษาไทยพลาด" in c["detail"]
     assert "turbo" not in c["detail"] + c["fix"]
+
+
+def test_enough_ram_is_green(monkeypatch):
+    monkeypatch.setattr(inst, "ram_bytes", lambda: 16 * 1024 ** 3)
+    assert doctor.check_ram()["status"] == "ok"
 
 
 def test_low_disk_warns(monkeypatch):

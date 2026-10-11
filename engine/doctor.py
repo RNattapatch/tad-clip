@@ -199,6 +199,15 @@ def check_asr(quick: bool = False) -> dict:
     return item("asr", name, "ok", f"whisper.cpp (ชิปกราฟิกของ Mac) · {exe}")
 
 
+def _model_ready(name: str, model: str, where: str) -> dict:
+    """The model is installed. medium works, but it mishears Thai much more than large-v3 and differently on different CPUs."""
+    if model == "medium":
+        return item("model", name, "warn",
+                    f"{where} · ภาษาไทยแม่นน้อยกว่า large-v3 ชัดเจน (ซับจะมีคำพลาดมาก แต่ละเครื่องไม่เท่ากัน) — ใช้เป็นทางสุดท้ายเท่านั้น",
+                    inst.setup_command("--model large-v3"))
+    return item("model", name, "ok", where)
+
+
 def check_model() -> dict:
     model = _cfg()["whisper"]["model"]
     if inst.asr_backend(_cfg()) == "whispercpp":
@@ -209,7 +218,7 @@ def check_model() -> dict:
         ok, why = inst.ggml_state(model)
         if not ok:
             return item("model", name, "fail", why, inst.setup_command(f"--model {model}"))
-        return item("model", name, "ok", why)
+        return _model_ready(name, model, why)
     name = f"โมเดลถอดเสียง {model}"
     if model not in inst.MODELS:   # setup falls back to the default model by itself
         return item("model", name, "fail",
@@ -220,7 +229,7 @@ def check_model() -> dict:
         size = f" (~{mb / 1024:.1f} GB)" if mb else ""
         return item("model", name, "fail", f"ยังไม่ได้โหลดโมเดล {model}{size} ลง {kit.models_dir()}",
                     inst.setup_command(f"--model {model}"))
-    return item("model", name, "ok", str(found))
+    return _model_ready(name, model, str(found))
 
 
 def check_chrome(quick: bool = False) -> dict:
@@ -300,8 +309,9 @@ def check_ram() -> dict:
     model = _cfg()["whisper"]["model"]
     if inst.low_ram(ram) and model.startswith("large"):
         return item("ram", name, "warn",
-                    f"RAM {ram / GB:.0f} GB (น้อยกว่า 8 GB) — โมเดล {model} อาจช้าหรือค้าง เปลี่ยนเป็น {inst.LIGHT_MODEL} จะเบากว่า",
-                    inst.setup_command(f"--model {inst.LIGHT_MODEL}"))
+                    f"RAM {ram / GB:.0f} GB (น้อยกว่า 8 GB) — โมเดล {model} อาจช้า ปิดโปรแกรมอื่นก่อนถอดเสียง "
+                    "ถ้ารันไม่ไหวจริงๆ ค่อยใช้ --model medium เป็นทางสุดท้าย (ฟังภาษาไทยพลาดมาก)",
+                    "ปิดโปรแกรมอื่นก่อนถอดเสียง")
     return item("ram", name, "ok", f"{ram / GB:.0f} GB")
 
 

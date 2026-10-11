@@ -82,7 +82,18 @@ def test_pull_requests_run_only_from_forks():
 
 
 def test_model_cache_key_names_the_model_per_backend():
-    assert "faster-whisper-medium" in CI and "ggml-base" in CI   # Windows smoke needs medium for Thai
+    # Windows runs the real default (large-v3): medium's Thai varies by CPU, so CI does not use it at all
+    assert "models-$RUNNER_OS-faster-whisper-large-v3-v3" in CI and "ggml-base" in CI
+    assert "faster-whisper-medium" not in CI
+
+
+def test_windows_ci_installs_and_smokes_large_v3_with_room_to_finish():
+    install = _step("Install (Windows")
+    assert "--model large-v3" in install and "medium" not in install
+    smoke = _step("Smoke (fixture")
+    assert "runner.os == 'Windows' && 'large-v3' || 'base'" in smoke    # macOS keeps base
+    assert "medium" not in smoke
+    assert "timeout-minutes: 40" in smoke    # large-v3 int8 on a 4-core runner
 
 
 # ---------------------------------------------------------------- skill preamble on Windows (final fix wave)
