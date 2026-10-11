@@ -4,6 +4,7 @@
 # Works in macOS bash/zsh and in Git Bash on Windows. Because of the cd, pass user files as absolute paths.
 # Git Bash: CLAUDE_PLUGIN_ROOT / TAD_CLIP_HOME may be C:\… paths and python prints CRLF lines with backslash paths,
 # so on Windows (OSTYPE msys/cygwin) backslashes become slashes and every \r is dropped before the values are used.
+# PYTHONUTF8=1 (this one python call only) makes python print tool paths under a non-ASCII Windows home as UTF-8, not ???.
 _tc_src="${BASH_SOURCE[0]:-$0}"
 TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
 case "$OSTYPE" in msys* | cygwin* | win32*) _tc_src="${_tc_src//\\//}"; TC_HOME="${TC_HOME//\\//}" ;; esac
@@ -13,7 +14,7 @@ PY="$TC_HOME/venv/bin/python"
 [ -x "$PY" ] || PY="$TC_HOME/venv/Scripts/python.exe"
 cd "$KIT" || return 1
 if [ -x "$PY" ]; then
-  _tc_tools="$("$PY" -c "from engine import kit
+  _tc_tools="$(PYTHONUTF8=1 "$PY" -c "from engine import kit
 for n in ('ffmpeg', 'node'):
     try: print(kit.tool(n))
     except kit.KitError: print('')" 2>/dev/null | tr -d '\r')"

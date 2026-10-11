@@ -997,8 +997,10 @@ def test_missing_asr_module_message(monkeypatch):
     assert "ถอดเสียง" in str(e.value)
 
 
-def _fake_asr(monkeypatch, results):
-    """Replace engine.asr.transcribe; results[k] is what call k returns. -> list of the prompts it was called with."""
+def _fake_asr(monkeypatch, results, backend="whispercpp", model="large-v3"):
+    """Replace engine.asr.transcribe; results[k] is what call k returns. -> list of the prompts it was called with.
+    backend / model pin which decoder the hint would reach (asr.backend_choice, asr.fw_prompt), so these tests do not
+    depend on the runner's config or TAD_CLIP_MODEL."""
     from engine import asr as real_asr
     prompts = []
 
@@ -1007,6 +1009,8 @@ def _fake_asr(monkeypatch, results):
         return results[min(len(prompts) - 1, len(results) - 1)]
 
     monkeypatch.setattr(real_asr, "transcribe", fake)
+    monkeypatch.setattr(real_asr, "backend_choice", lambda: (backend, False))
+    monkeypatch.setattr(real_asr, "fw_prompt", lambda prompt, m=None: prompt if model in real_asr.LARGE_V3 else None)
     return prompts
 
 
@@ -1110,6 +1114,46 @@ def test_a_weak_result_without_a_prompt_is_not_retried(tmp_path, monkeypatch):
     prompts = _fake_asr(monkeypatch, [one, mini()])
     assert cli._transcribe(_silent_wav(tmp_path / "a.wav", 2), None) == one
     assert prompts == [None]
+
+
+@pytest.mark.parametrize("backend, model, retried", [
+    ("whispercpp", "medium", True),          # whisper.cpp always sends the hint
+    ("whispercpp", "large-v3", True),
+    ("faster-whisper", "large-v3", True),    # large-v3 gets the hint, so a weak result is worth a retry
+    ("faster-whisper", "medium", False),     # smaller models never send it: a retry would repeat the same decode
+    ("faster-whisper", "base", False),
+])
+def test_the_weak_result_retry_only_runs_when_the_hint_was_really_sent(tmp_path, monkeypatch, capsys, backend, model,
+                                                                      retried):
+    one = _asr_of(("ครับ", 500, 900))
+    prompts = _fake_asr(monkeypatch, [one, mini()], backend=backend, model=model)
+    out = cli._transcribe(_silent_wav(tmp_path / "a.wav", 20), "คำใบ้")
+    said = capsys.readouterr().out
+    if retried:
+        assert out == mini() and prompts == ["คำใบ้", None] and "ไม่ใส่คำใบ้" in said
+    else:
+        assert out == one and prompts == ["คำใบ้"] and "คำใบ้" not in said and "ถอดใหม่" not in said
+
+
+def test_no_retry_and_no_notice_for_an_empty_run_with_a_dropped_hint_either(monkeypatch, capsys):
+    prompts = _fake_asr(monkeypatch, [EMPTY, mini()], backend="faster-whisper", model="medium")
+    with pytest.raises(kit.KitError) as e:
+        cli._transcribe(Path("x.wav"), "คำใบ้")
+    assert "ไม่ได้ซับเลย" in str(e.value)
+    assert prompts == ["คำใบ้"] and "ถอดใหม่" not in capsys.readouterr().out
+
+
+@needs_ffmpeg
+def test_patch_does_not_retry_when_faster_whisper_dropped_the_hint(tmp_path, monkeypatch, capsys):
+    d = make_work(tmp_path)
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=300:duration=30",
+                    "-ac", "1", "-ar", "16000", str(d / "audio.wav")], check=True)
+    stalled = _asr_of(("ท่อน", 0, 300), ("ค้าง", 300, 6500))
+    prompts = _fake_asr(monkeypatch, [stalled, _asr_of(("ไม่ควรถูกเรียก", 0, 900))], backend="faster-whisper",
+                        model="medium")
+    assert cli.main(["patch", str(d), "--from", "13", "--to", "20", "--no-snap"]) == 0
+    assert len(prompts) == 1 and "ถอดใหม่อีกครั้ง" not in capsys.readouterr().out
+    assert any("ท่อนค้าง" in c["t"] for c in raw_cues(d))
 
 
 @needs_ffmpeg

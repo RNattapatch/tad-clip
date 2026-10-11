@@ -39,7 +39,8 @@ def preamble(plugin_root, home, ostype=None):
            "CLAUDE_PLUGIN_ROOT": str(plugin_root), "LANG": "en_US.UTF-8"}
     if ostype:
         env["OSTYPE"] = ostype
-    script = PREAMBLE + "\nprintf '%s\\n' \"KIT=$KIT\" \"PY=$PY\" \"FF=$FF\" \"NODE=$NODE\" \"PWD=$PWD\"\n"
+    script = PREAMBLE + ("\nprintf '%s\\n' \"KIT=$KIT\" \"PY=$PY\" \"FF=$FF\" \"NODE=$NODE\" \"PWD=$PWD\""
+                         " \"UTF8=${PYTHONUTF8-unset}\"\n")
     res = subprocess.run([BASH, "--noprofile", "--norc", "-eo", "pipefail", "-c", script], cwd="/", env=env,
                          capture_output=True)
     assert res.returncode == 0, res.stderr.decode("utf-8", "replace")
@@ -59,6 +60,20 @@ def test_crlf_from_python_never_reaches_the_tool_paths(tmp_path):
     assert got["FF"] == "/opt/kit tools/ffmpeg" and got["NODE"] == "/opt/kit tools/node"
     assert got["KIT"] == str(ROOT) and got["PWD"] == str(ROOT)            # and it cd's into the kit
     assert got["PY"] == f"{home}/venv/bin/python"
+
+
+def test_python_runs_with_utf8_mode_so_a_non_ascii_windows_home_prints_correctly(tmp_path):
+    """Windows python prints paths in the ANSI code page unless PYTHONUTF8=1 (a Thai user name came out as ?????).
+    The fake python echoes the PYTHONUTF8 it was started with in place of the tool paths."""
+    home = tmp_path / "บ้าน kit"
+    py = home / "venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("#!/bin/sh\nprintf '/x/ffmpeg-%s\\r\\n/x/node-%s\\r\\n' \"$PYTHONUTF8\" \"$PYTHONUTF8\"\n", encoding="utf-8")
+    py.chmod(0o755)
+    for ostype in (None, "msys"):
+        got = preamble(ROOT, home, ostype=ostype)
+        assert got["FF"] == "/x/ffmpeg-1" and got["NODE"] == "/x/node-1", got
+        assert got["UTF8"] == "unset"                                      # only that one python call, not the user's shell
 
 
 def test_git_bash_gets_forward_slash_windows_paths(tmp_path):

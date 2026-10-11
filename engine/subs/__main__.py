@@ -91,19 +91,27 @@ def _weak(result, audio_ms, prompt=""):
     return None
 
 
+def _hint_was_sent(asr, prompt):
+    """True when the prompted run really carried the hint: whisper.cpp always sends it, faster-whisper only on
+    large-v3 (asr.fw_prompt is None for smaller models). Without it a "retry without the prompt" repeats the same
+    seeded decode (~2 min for medium on CPU) and the notice would be a lie."""
+    return asr.backend_choice()[0] == "whispercpp" or asr.fw_prompt(prompt) is not None
+
+
 def _transcribe(wav, prompt):
     """engine.asr.transcribe -> whisper.cpp -ojf shaped dict. Imported lazily so the rest works without whisper.
 
     A prompt can pull the decoder off the speech: faster-whisper has returned nothing at all, a single word, or one
     word stretched over most of the clip when given the hint (seen on the Windows CI smoke test). A prompted run that
     looks like that (_weak) is retried once without the prompt, and says so; the retry wins unless it heard nothing
-    at all. Still empty is the usual "no speech" error, and nothing is cached as done."""
+    at all. Only when the hint was really sent (_hint_was_sent) - a run that never carried it has nothing to drop.
+    Still empty is the usual "no speech" error, and nothing is cached as done."""
     fix = "พิมพ์ \"ตรวจเครื่อง tad-clip\" ให้ Claude ติดตั้งส่วนที่ขาดให้"
     try:
         from engine import asr
         result = asr.transcribe(str(wav), prompt=prompt)
         why = _weak(result, _audio_ms(wav), prompt) if prompt else None
-        if why:
+        if why and _hint_was_sent(asr, prompt):
             _say(f"ใส่คำใบ้แล้วตัวถอดเสียง{why} — ถอดใหม่อีกครั้งโดยไม่ใส่คำใบ้")
             retry = asr.transcribe(str(wav), prompt=None)
             if _has_words(retry) or not _has_words(result):

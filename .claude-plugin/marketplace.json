@@ -12,7 +12,7 @@
       "name": "tad-clip",
       "source": "./",
       "description": "ตัดคลิปพูดหน้ากล้องภาษาไทยด้วย Claude — ฟรี ไม่ใช้ API ไม่มีค่ารายเดือนเพิ่มจากค่า Claude",
-      "version": "1.0.0"
+      "version": "1.0.1"
     }
   ]
 }
