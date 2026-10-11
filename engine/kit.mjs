@@ -15,7 +15,7 @@ export const DEFAULTS = {
   brand: { preset: 'neutral', font: 'Prompt', colors: {} },
   subtitle: { highlight: '#FF7F50', size: 60, margin_v: 340, max_chars: 22 },
   output: { preset: '1080p', safe_zone: 'tiktok' },
-  whisper: { model: 'large-v3', device: 'auto', compute_type: 'auto' },
+  whisper: { model: 'large-v3', backend: 'auto', device: 'auto', compute_type: 'auto' },
   library_dir: null,
   glossary: { fixes: [], glue: [], protect: [], prompt_hint: '' },
   cutout: { engine: 'auto' },
