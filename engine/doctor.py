@@ -348,7 +348,7 @@ def main(argv=None) -> int:
         mode, title = "qc", f"ตรวจคลิป {a.qc}"
         try:
             checks = qc(a.qc, a.expect_duration)
-        except kit.KitError as e:
+        except (kit.KitError, ValueError) as e:
             checks = [item("file", "อ่านไฟล์", "fail", str(e).splitlines()[0], "เช็คว่าไฟล์มีอยู่จริงและเล่นได้")]
     else:
         mode = "quick" if a.quick else "full"

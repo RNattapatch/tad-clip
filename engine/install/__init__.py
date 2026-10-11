@@ -275,7 +275,7 @@ def setup_command(extra: str = "") -> str:
         uv = kit.home() / "bin" / "uv.exe"
         try:
             uv = Path(kit.tool("uv"))
-        except kit.KitError:
+        except (kit.KitError, ValueError):   # ValueError = broken config.json, reported by doctor's setup row
             pass
         return f'"{uv.as_posix()}" run --no-project --python 3.12 "{setup}"{tail}'
     return f'python3 "{setup}"{tail}'

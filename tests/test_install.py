@@ -326,3 +326,28 @@ def test_plan_mentions_cuda_libs_on_windows_with_nvidia():
     assert any("CUDA" in line for line in lines)
     lines2, mb2 = setup.plan("windows", "large-v3", with_cutout=False, gpu=None, have={})
     assert not any("CUDA" in line for line in lines2) and mb > mb2
+
+
+# ---------------------------------------------------------------- Windows-only edges seen on CI
+def test_windows_fix_command_survives_a_broken_config(monkeypatch):
+    kit.home().mkdir(parents=True, exist_ok=True)
+    (kit.home() / "config.json").write_text('{"tools": {', encoding="utf-8")
+    monkeypatch.setattr(kit, "IS_WINDOWS", True)
+    cmd = inst.setup_command("--model base")
+    assert "uv.exe" in cmd and cmd.endswith("--yes --model base")
+
+
+def test_no_yes_on_a_fake_tty_that_hits_eof_exits_2(monkeypatch, capsys):
+    class NulStdin:          # Windows: NUL claims to be a tty, then input() raises EOFError
+        def isatty(self):
+            return True
+
+        def readline(self):
+            return ""
+
+    monkeypatch.setattr(inst, "os_name", lambda: "windows")
+    monkeypatch.setattr(inst, "nvidia_gpu", lambda: None)
+    monkeypatch.setattr(windows, "have", lambda: {})
+    monkeypatch.setattr(sys, "stdin", NulStdin())
+    assert setup.main(["--model", "base"]) == 2
+    assert "--yes" in capsys.readouterr().out

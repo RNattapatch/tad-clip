@@ -124,6 +124,8 @@ def run(cmd: list, **kw) -> subprocess.CompletedProcess:
     kw.setdefault("text", True)
     kw.setdefault("encoding", "utf-8")
     kw.setdefault("errors", "replace")
+    kw.setdefault("stdin", subprocess.DEVNULL)   # ffmpeg on Windows otherwise waits on an inherited stdin pipe
+    kw.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})   # child pythons write what we decode (utf-8)
     try:
         res = subprocess.run([str(c) for c in cmd], **kw)
     except FileNotFoundError as e:

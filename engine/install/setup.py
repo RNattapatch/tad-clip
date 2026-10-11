@@ -264,10 +264,14 @@ def main(argv=None) -> int:
             raise kit.KitError(f"พื้นที่ว่างไม่พอ ต้องการประมาณ {(need_mb + 1024) / 1024:.1f} GB "
                                f"(เผื่อไฟล์งาน) แต่ว่าง {free_mb / 1024:.1f} GB — ลบไฟล์ที่ไม่ใช้แล้วสั่งติดตั้งใหม่")
         if not a.yes:
-            if not sys.stdin.isatty():
+            answer = ""
+            if sys.stdin and sys.stdin.isatty():   # Windows reports NUL as a tty too → EOFError below
+                try:
+                    answer = input("\nติดตั้งเลยไหม? [y/N] ").strip().lower()
+                except EOFError:
+                    answer = ""
+            if answer not in ("y", "yes"):
                 say("\nยังไม่ได้ติดตั้งอะไร — เพิ่ม --yes ต่อท้ายคำสั่งเพื่อเริ่มติดตั้ง")
-                return 2
-            if input("\nติดตั้งเลยไหม? [y/N] ").strip().lower() not in ("y", "yes"):
                 return 2
 
         say("\n[1/5] โปรแกรมหลัก")

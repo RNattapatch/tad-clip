@@ -79,11 +79,11 @@ def choose_drops(phrases: list, ranges: list) -> list:
     return out
 
 
-def build_plan(template: dict, end: float, mac: bool) -> dict:
+def build_plan(template: dict, end: float, cutout: bool) -> dict:
     plan = json.loads(json.dumps(template))
     shots = []
     for s in plan["shots"]:
-        if s.pop("mac_only", False) and not mac:   # Windows has no cut-out engine by default → plain speaker shot
+        if s.pop("mac_only", False) and not cutout:   # no cut-out engine here (Windows default, or no Vision) → plain speaker shot
             s = {"id": s["id"], "t": s["t"], "layout": "full-speaker", "say": s["say"], "overlays": s.get("overlays", [])}
         shots.append(s)
     if end < shots[-1]["t"][0] + 0.5:
@@ -125,6 +125,24 @@ def frames(video: Path, times: dict, dest: Path) -> list:
         kit.run([kit.tool("ffmpeg"), "-v", "error", "-y", "-ss", f"{t:.3f}", "-i", video, "-frames:v", "1", png])
         out.append(png)
     return out
+
+
+def vision_runs(py: Path, src: Path, work: Path) -> bool:
+    """Apple Vision needs a GPU / Neural Engine; GitHub's macOS VMs have neither ("Could not create inference
+    context"). Any other cut-out failure is a real bug and fails the smoke."""
+    seg, out = work / "vision-probe.mp4", work / "vision-probe.webm"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-y", "-i", src, "-t", "0.5", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", seg])
+    res = subprocess.run([str(py), "-m", "engine.cutout", str(seg), str(out), "vision"], cwd=str(ROOT), capture_output=True,
+                         text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    for f in (seg, out):
+        if f.exists():
+            f.unlink()
+    if res.returncode == 0:
+        return True
+    log = (res.stdout or "") + (res.stderr or "")
+    if "Could not create inference context" in log:
+        return False
+    raise SmokeFail(f"Apple Vision cut-out probe failed: {log.strip()[-400:]}")
 
 
 def missing_pieces() -> list:
@@ -195,8 +213,12 @@ def main(argv=None) -> int:
             raise SmokeFail("finalize did not write <name>.karaoke.ass + <name>.srt")
 
         step("3. visuals")
+        cutout = mac and vision_runs(py, rc, clipdir)
+        if mac and not cutout:
+            say("NOTE: Apple Vision cannot run on this machine (no GPU / Neural Engine — e.g. a CI virtual machine) "
+                "→ the cut-out shot is rendered as a plain speaker shot")
         end = math.floor(rc_dur * 30) / 30
-        plan = build_plan(json.loads((HERE / "plan.json").read_text(encoding="utf-8")), end, mac)
+        plan = build_plan(json.loads((HERE / "plan.json").read_text(encoding="utf-8")), end, cutout)
         plan["subs"] = kass[0].relative_to(clipdir).as_posix()
         (clipdir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         (clipdir / "assets" / "ai").mkdir(parents=True)
