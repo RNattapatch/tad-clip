@@ -1,6 +1,6 @@
 ---
 name: tad-clip
-description: ตัดคลิปพูดหน้ากล้องภาษาไทยให้จบเป็น MP4 พร้อมลง — ตัดเทคซ้ำและช่วงเงียบ ใส่ซับคาราโอเกะ แทรกภาพจริง/คลิปจริง/มีม/เสียงเอฟเฟกต์/การ์ดข้อความ ฟรีทั้งหมด ไม่ใช้ API ไม่มีรายเดือน. Use when the user says "ตัดคลิป", "ตัดคลิปนี้", "ตัดต่อคลิป", "ตัดคลิปให้หน่อย", "ทำคลิปนี้ให้จบ", "cut this video", "edit my reel", "tad-clip", or drops a video file and asks to edit it. For subtitles only use tad-clip-subs · visuals only use tad-clip-visual · install/check use tad-clip-setup.
+description: ตัดคลิปพูดหน้ากล้องภาษาไทยให้จบเป็น MP4 พร้อมลง — ตัดเทคซ้ำและช่วงเงียบ ใส่ซับคาราโอเกะ แทรกภาพจริง/คลิปจริง/มีม/เสียงเอฟเฟกต์/การ์ดข้อความ ฟรี ไม่ใช้ API ไม่มีค่ารายเดือนเพิ่มจากค่า Claude. Use when the user says "ตัดคลิป", "ตัดคลิปนี้", "ตัดต่อคลิป", "ตัดคลิปให้หน่อย", "ทำคลิปนี้ให้จบ", "cut this video", "edit my reel", "tad-clip", or drops a video file and asks to edit it. For subtitles only use tad-clip-subs · visuals only use tad-clip-visual · install/check use tad-clip-setup.
 argument-hint: "[path วิดีโอ]"
 ---
 
@@ -92,7 +92,15 @@ W="<โฟลเดอร์งานของคลิปนี้>"
 "$PY" -m engine.subs finalize "$W/subs" --edits "$W/subs/edits.json"   # ไม่มีอะไรต้องแก้ → ไม่ต้องใส่ --edits
 ```
 
-ถ้าผู้ใช้เลือก "แค่ซับ" หรือ "ตัด + ซับ" → เผาซับลงคลิปด้วย `"$NODE" engine/visual/thv.mjs subs` ตามวิธีใน skill **tad-clip-subs** แล้วข้ามไปข้อ 9
+ถ้าผู้ใช้เลือก "แค่ซับ" หรือ "ตัด + ซับ" (ไม่มีภาพประกอบ) → เผาซับด้วย `engine.subs burn` ลงไฟล์ชื่อเดียวกับที่ขั้นเรนเดอร์ภาพใช้ แล้วข้ามไปข้อ 8 (คุมเสียงพีค) และข้อ 9:
+
+```bash
+K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
+W="<โฟลเดอร์งานของคลิปนี้>"
+mkdir -p "$W/out" && "$PY" -m engine.subs burn "$W/roughcut.mp4" "$W/subs/<ชื่อ>.karaoke.ass" -o "$W/out/preview-composite-subs.mp4"
+```
+
+(ถ้าผู้ใช้ตัดเองมาแล้ว ใช้ไฟล์ของผู้ใช้แทน `roughcut.mp4` · `<ชื่อ>` คือชื่อไฟล์ .karaoke.ass ที่ `finalize` เขียนไว้ใน `$W/subs/`)
 
 ## 5. ภาพประกอบ: ตัดสินว่าแต่ละช่วงต้องเห็นอะไร
 

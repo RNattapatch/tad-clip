@@ -152,8 +152,32 @@ def check_python(quick: bool = False) -> dict:
     return item("python", name, "ok", f"{', '.join(VENV_MODULES)} · {py}")
 
 
+def check_asr(quick: bool = False) -> dict:
+    cfg = _cfg()
+    backend = inst.asr_backend(cfg)
+    name = "ตัวถอดเสียง"
+    if backend != "whispercpp":
+        device = cfg["whisper"].get("device") or "auto"
+        return item("asr", name, "ok", f"faster-whisper · device {device}")
+    fix = _brew_fix("whisper-cpp") if _os() == "mac" else inst.setup_command()
+    exe, why = _tool("whisper-cli")
+    if not exe:
+        return item("asr", name, "fail", f"{why} (whisper.cpp)", fix)
+    if not quick:
+        code, out = inst._out([exe, "--help"], timeout=60)
+        if code != 0:
+            return item("asr", name, "fail", f"whisper-cli เรียกแล้วไม่ตอบ (exit {code}) — {exe}", fix)
+    return item("asr", name, "ok", f"whisper.cpp (ชิปกราฟิกของ Mac) · {exe}")
+
+
 def check_model() -> dict:
     model = _cfg()["whisper"]["model"]
+    if inst.asr_backend(_cfg()) == "whispercpp":
+        name = f"โมเดลถอดเสียง {model} (whisper.cpp)"
+        ok, why = inst.ggml_state(model)
+        if not ok:
+            return item("model", name, "fail", why, inst.setup_command(f"--model {model}"))
+        return item("model", name, "ok", why)
     name = f"โมเดลถอดเสียง {model}"
     found = inst.model_dir(model, kit.models_dir())
     if not found:
@@ -214,9 +238,11 @@ def check_cutout() -> dict:
             return item("cutout", name, "warn", "Apple Vision ใช้ได้เฉพาะ Mac", inst.setup_command("--with-cutout"))
         sc = inst.swiftc()
         if not sc:
-            return item("cutout", name, "warn", "ไม่พบ swiftc (Xcode Command Line Tools) — ตัดพื้นหลังด้วย Apple Vision ไม่ได้",
+            return item("cutout", name, "fail",
+                        "ยังไม่มี Xcode Command Line Tools (ใช้ตัดพื้นหลังคนด้วย Apple Vision) — "
+                        "สั่งแล้วจะมีหน้าต่างให้กด \"ติดตั้ง\" รอราว 5–10 นาที",
                         "xcode-select --install")
-        return item("cutout", name, "ok", f"Apple Vision · {sc}")
+        return item("cutout", name, "ok", f"Apple Vision · xcrun swiftc ({sc})")
     if not _venv_has("transparent_background"):
         return item("cutout", name, "warn", "ตั้งไว้เป็น transparent-background แต่ยังไม่ได้ติดตั้ง",
                     inst.setup_command("--with-cutout"))
@@ -248,8 +274,8 @@ def check_ram() -> dict:
 def collect(quick: bool = False) -> list:
     if quick:
         return [check_setup(), check_ffmpeg(True), check_ffprobe(True), check_node(True),
-                check_python(True), check_model(), check_chrome(True)]
-    return [check_setup(), check_ffmpeg(), check_ffprobe(), check_node(), check_python(), check_model(),
+                check_python(True), check_asr(True), check_model(), check_chrome(True)]
+    return [check_setup(), check_ffmpeg(), check_ffprobe(), check_node(), check_python(), check_asr(), check_model(),
             check_chrome(), check_ytdlp(), check_cutout(), check_disk(), check_ram()]
 
 

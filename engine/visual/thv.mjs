@@ -83,6 +83,7 @@ function sdr(file) {
 }
 
 // ---------------------------------------------------------------- cut-out engine (config.cutout.engine: auto | vision | tb | off)
+// TAD_CLIP_TB_PYTHON (dev/testing only, not user-facing): run tb with another venv's python that already has transparent-background
 function tbPython() { if (process.env.TAD_CLIP_TB_PYTHON) return process.env.TAD_CLIP_TB_PYTHON; try { return tool('python'); } catch { return null; } }
 function tbInstalled() {
   const py = tbPython(); if (!py) return false;
@@ -313,17 +314,17 @@ async function openBrowser() {
   };
   let tmp = udd;
   let sessionId;
-  try {
+  const send = (method, params = {}) => raw(method, params, sessionId);
+  try {   // any failure while setting up closes this browser and its temp profile before the error leaves
     const { targetId } = await raw('Target.createTarget', { url: 'about:blank' });
     ({ sessionId } = await raw('Target.attachToTarget', { targetId, flatten: true }));
+    await send('Page.enable');
   } catch (e) { await close(); throw new Error(`เปิด Chrome/Edge ไม่สำเร็จ (${bin}): ${e.message}`); }
-  const send = (method, params = {}) => raw(method, params, sessionId);
   const once = name => new Promise((r, rej) => {   // an event, with the same 60 s guard and death check as a command
     const to = setTimeout(() => { listeners.delete(f); rej(new Error(`CDP ${name} ค้างเกิน 60 วิ — Chrome ค้าง`)); }, 60000);
     const f = m => { if (m.method === name && m.sessionId === sessionId) { clearTimeout(to); listeners.delete(f); r(m.params); }
       else if (m.method === '__dead') { clearTimeout(to); listeners.delete(f); rej(dead); } };
     listeners.add(f); });
-  await send('Page.enable');
   tmp = mkdtempSync(join(tmpdir(), 'thv-job-'));
   const b = {
     send,
@@ -341,7 +342,9 @@ async function openBrowser() {
       // mid-run by a sync tool → verify the frame was built, retry once, else stop loudly
       for (let attempt = 0; ; attempt++) {
         const loaded = once('Page.loadEventFired');
-        await send('Page.navigate', { url: pathToFileURL(f).href }); await loaded;
+        const nav = send('Page.navigate', { url: pathToFileURL(f).href });
+        if (testKill(job)) proc.kill('SIGKILL');
+        await Promise.all([nav, loaded]);   // never leave `loaded` without a handler: a browser dying mid-navigate rejects both → perShot retries
         await b.evaluate('document.fonts.ready.then(() => true)');
         if (await b.evaluate("document.querySelectorAll('#root *').length > 0")) break;
         if (attempt) throw new Error(`render หน้าว่าง (job ${job.kind} ${job.shot ? 'shot ' + job.shot.id : ''}) — เช็ค engine/visual/cards.html`);
@@ -356,12 +359,19 @@ async function openBrowser() {
   return b;
 }
 
+// test hook (tests/visual.test.mjs): THV_TEST_KILL_BROWSER=<shot id> SIGKILLs the browser once, right after Page.navigate for that shot
+let testKilled = false;
+const testKill = job => { if (testKilled || !job.shot || process.env.THV_TEST_KILL_BROWSER !== String(job.shot.id)) return false; testKilled = true; return true; };
+
 // a hung headless Chrome only spoils the shot it was drawing → restart Chrome and redo that shot, 3 tries
 // (a 24-shot 2K render died on one CDP timeout; rerunning that shot alone passed)
+// hang (our 60 s timeouts) · browser gone (pipe closed / exit) · renderer gone ("Inspected target navigated or closed",
+// "Target crashed", "Session with given id not found") → worth a fresh browser; anything else is a real error
+export const isRetryable = e => /ค้างเกิน|closed|crash|ปิดตัวเอง|session with given id not found/i.test((e && e.message) || '');
 async function perShot(B, list, fn) {
   for (const s of list) for (let i = 1; ; i++) {
     try { await fn(B.cur, s, i); break; } catch (e) {
-      if (i >= 3 || !/ค้างเกิน|pipe closed|ปิดตัวเอง/i.test(e.message)) throw e;
+      if (i >= 3 || !isRetryable(e)) throw e;
       console.log(`↻ shot ${s.id}: Chrome ค้าง → เปิดใหม่ ลองครั้งที่ ${i + 1}${K > 1 ? ' (วาดที่ 1080 แล้วขยาย)' : ''}`);
       await B.cur.close().catch(() => {}); B.cur = await openBrowser();
     }
@@ -510,7 +520,9 @@ async function compose() {
   const tmp = mkdtempSync(join(tmpdir(), 'thv-compose-')); const list = [];
   // output = 1080×1920 × K (2k60 → 1440×2560) · every number below stays in 1080 design space, px() converts
   const px = n => Math.round(n * K), OW = px(W), OH = px(H);
-  const P = `${sdr(src)}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},setsar=1`;
+  // the speaker's clip enters every graph already limited-range BT.709 — graphics are limited range, and a full-range
+  // phone clip that skipped roughcut would otherwise be blended in a different range
+  const P = `${sdr(src)}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},setsar=1,${TO709}`;
   const KEY = 'chromakey=0x00FF00:0.28:0.06';
   // plan.face_circle = { window: [x, y, side] of the speaker's 1080×1920 frame, size, card_y, cutout_y, feather, mode }
   // → on full-card shots (and instead of the PiP box on cutout) the speaker's live face sits in a circle whose edge fades out
@@ -556,7 +568,7 @@ async function compose() {
     let fc, ins = inMain;
     const cut = s.layout === 'cutout' && clip ? await cutoutOf(s, ss, n) : null;
     const cutCard = s.layout === 'full-card' && clip && FC && s.face !== false && useCutCard ? await cutoutOf(s, ss, n) : null;
-    const foot = ft => `${sdr(planPath(ft.file))}setpts=PTS/${ft.speed || 1},fps=${FPS}`;
+    const foot = ft => `${sdr(planPath(ft.file))}setpts=PTS/${ft.speed || 1},fps=${FPS},${TO709}`;
     if (cutCard) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cutCard]; fc = `[0:v]fps=${FPS},setsar=1[b];${bust('1:v', FC.card_y ?? 230, flip)}`; }
     else if (s.layout === 'full-card' && clip && FC && s.face !== false) { ins = ['-i', clip, ...inMain]; fc = `[0:v]fps=${FPS},setsar=1[b];${face('1:v', FC.card_y ?? 230, PS)}`; }
     else if (s.layout === 'full-card' && clip) { ins = ['-i', clip]; fc = `[0:v]fps=${FPS},setsar=1[v]`; }
@@ -597,8 +609,7 @@ async function compose() {
 // split shots: the speaker sits in the bottom half, so the normal subtitle band lands on the face → those lines get style "Split"
 // with the baseline just under the seam (plan.split_sub_y %, default 59). Everything else keeps the .ass as made by engine.subs.
 async function subs() {
-  const assArg = flag('ass');
-  const ass = assArg ? resolve(assArg) : planPath(plan.subs);
+  const ass = planPath(flag('ass') || plan.subs);   // --ass wins · relative paths are relative to the plan folder (env.sh cd's into the kit)
   if (!ass) throw new Error('subs ต้องมี plan.subs (path ไฟล์ .karaoke.ass เทียบกับโฟลเดอร์ของ plan · ได้จาก python -m engine.subs finalize) หรือ --ass <ไฟล์>');
   const comp = join(OUT, 'preview-composite.mp4');
   if (!existsSync(ass)) throw new Error('ไม่เจอไฟล์ซับ: ' + ass);

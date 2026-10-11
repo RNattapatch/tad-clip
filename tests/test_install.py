@@ -172,7 +172,7 @@ def test_no_homebrew_stops_with_the_official_one_liner(monkeypatch):
 
 def test_mac_installs_only_what_is_missing(monkeypatch, tmp_path):
     prefix = tmp_path / "brew prefix"
-    state = {"ffmpeg": None, "ffprobe": None, "node": "/x/node", "uv": None, "yt-dlp": "/x/yt-dlp"}
+    state = {"ffmpeg": None, "ffprobe": None, "node": "/x/node", "uv": None, "yt-dlp": "/x/yt-dlp", "whisper-cli": "/x/whisper-cli"}
     installed = []
     monkeypatch.setattr(mac, "brew", lambda: "/fake/brew")
     monkeypatch.setattr(mac, "brew_prefix", lambda b: prefix)
@@ -185,11 +185,12 @@ def test_mac_installs_only_what_is_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(mac, "brew_install", fake_install)
     tools = mac.install_tools()
     assert installed == ["ffmpeg-full", "uv"]
-    assert tools == {"ffmpeg": "/p/ffmpeg", "ffprobe": "/p/ffprobe", "node": "/x/node", "uv": "/p/uv", "yt-dlp": "/x/yt-dlp"}
+    assert tools == {"ffmpeg": "/p/ffmpeg", "ffprobe": "/p/ffprobe", "node": "/x/node", "uv": "/p/uv", "yt-dlp": "/x/yt-dlp",
+                     "whisper-cli": "/x/whisper-cli"}
 
 
 def test_mac_skips_brew_when_everything_is_there(monkeypatch):
-    full = {"ffmpeg": "/a", "ffprobe": "/b", "node": "/c", "uv": "/d", "yt-dlp": "/e"}
+    full = {"ffmpeg": "/a", "ffprobe": "/b", "node": "/c", "uv": "/d", "yt-dlp": "/e", "whisper-cli": "/f"}
     monkeypatch.setattr(mac, "brew", lambda: "/fake/brew")
     monkeypatch.setattr(mac, "brew_prefix", lambda b: Path("/opt/homebrew"))
     monkeypatch.setattr(mac, "find", lambda p: dict(full))
@@ -206,7 +207,7 @@ def test_mac_find_uses_keg_only_ffmpeg_full(tmp_path, monkeypatch):
     monkeypatch.setattr(inst, "which", lambda name, extra_dirs=(): None)
     found = mac.find(prefix)
     assert found["ffmpeg"] == str(keg / "ffmpeg") and found["ffprobe"] == str(keg / "ffprobe")
-    assert found["node"] is None and mac.missing(found) == ["node", "uv", "yt-dlp"]
+    assert found["node"] is None and mac.missing(found) == ["node", "uv", "yt-dlp", "whisper-cpp"]
 
 
 def test_mac_old_node_on_path_counts_as_missing(tmp_path, monkeypatch):
@@ -351,3 +352,122 @@ def test_no_yes_on_a_fake_tty_that_hits_eof_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", NulStdin())
     assert setup.main(["--model", "base"]) == 2
     assert "--yes" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- whisper.cpp model download (macOS)
+class FakeHTTP:
+    """Serves `data`, honouring a Range header like Hugging Face's CDN (206 + Content-Range)."""
+
+    def __init__(self, data: bytes, fail_after: int = None, ignore_range=False):
+        self.data, self.fail_after, self.ignore_range, self.calls = data, fail_after, ignore_range, []
+
+    def __call__(self, req, timeout=None):
+        import urllib.error
+        rng = req.get_header("Range")
+        start = int(rng.split("=")[1].rstrip("-")) if rng and not self.ignore_range else 0
+        self.calls.append(start)
+        if rng and not self.ignore_range and start >= len(self.data):
+            raise urllib.error.HTTPError(req.full_url, 416, "Range Not Satisfiable", {}, None)
+        partial = bool(rng) and not self.ignore_range
+        headers = {"Content-Length": str(len(self.data) - start)}
+        if partial:
+            headers["Content-Range"] = f"bytes {start}-{len(self.data) - 1}/{len(self.data)}"
+        return _Resp(self.data[start:], 206 if partial else 200, headers, self._take_fail())
+
+    def _take_fail(self):
+        f, self.fail_after = self.fail_after, None   # only the first response breaks
+        return f
+
+
+class _Resp(io.BytesIO):
+    def __init__(self, body, status, headers, fail_after):
+        super().__init__(body)
+        self.status, self.headers, self.fail_after = status, headers, fail_after
+
+    def read(self, n=-1):
+        if self.fail_after is not None:
+            if self.tell() >= self.fail_after:
+                raise OSError("connection reset")
+            n = min(n if n and n > 0 else self.fail_after, self.fail_after - self.tell())
+        return super().read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_resumable_download_resumes_after_a_drop(monkeypatch, tmp_path):
+    data = bytes(range(256)) * 4000            # ~1 MB
+    http = FakeHTTP(data, fail_after=300_000)
+    monkeypatch.setattr(inst.urllib.request, "urlopen", http)
+    monkeypatch.setattr(inst.time, "sleep", lambda s: None)
+    out = inst.download_resumable("https://x/ggml-base.bin", tmp_path / "โมเดล ggml-base.bin", "base", expected=len(data))
+    assert out.read_bytes() == data
+    assert http.calls[0] == 0 and http.calls[1] == 300_000      # second request asked for the rest only
+    assert not (tmp_path / "โมเดล ggml-base.bin.part").exists()
+
+
+def test_resumable_download_continues_an_old_part_file(monkeypatch, tmp_path):
+    data = b"x" * 5000 + b"y" * 5000
+    dest = tmp_path / "ggml-small.bin"
+    (tmp_path / "ggml-small.bin.part").write_bytes(data[:5000])
+    http = FakeHTTP(data)
+    monkeypatch.setattr(inst.urllib.request, "urlopen", http)
+    inst.download_resumable("https://x/ggml-small.bin", dest, "small", expected=len(data))
+    assert http.calls == [5000] and dest.read_bytes() == data
+
+
+def test_resumable_download_restarts_when_server_ignores_range(monkeypatch, tmp_path):
+    data = b"abc" * 1000
+    (tmp_path / "f.bin.part").write_bytes(b"zzz")
+    monkeypatch.setattr(inst.urllib.request, "urlopen", FakeHTTP(data, ignore_range=True))
+    assert inst.download_resumable("https://x/f.bin", tmp_path / "f.bin", "f").read_bytes() == data
+
+
+def test_resumable_download_rejects_wrong_size(monkeypatch, tmp_path):
+    monkeypatch.setattr(inst.urllib.request, "urlopen", FakeHTTP(b"short"))
+    monkeypatch.setattr(inst.time, "sleep", lambda s: None)
+    with pytest.raises(kit.KitError, match="ขนาดไม่ตรง"):
+        inst.download_resumable("https://x/f.bin", tmp_path / "f.bin", "f", expected=999)
+    assert not (tmp_path / "f.bin").exists()
+
+
+def test_setup_downloads_ggml_for_whispercpp(monkeypatch):
+    got = []
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+    def fake(url, dest, label, expected=None):
+        got.append((url, Path(dest).name, expected))
+        with open(dest, "wb") as h:
+            h.truncate(expected)
+
+    monkeypatch.setattr(inst, "download_resumable", fake)
+    monkeypatch.setattr(setup, "_call", lambda *a, **k: pytest.fail("must not fetch the faster-whisper model on the whisper.cpp path"))
+    setup.download_model(Path("py"), "large-v3")
+    assert got == [("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin", "ggml-large-v3.bin", 3095033483)]
+
+
+def test_setup_skips_complete_ggml(monkeypatch):
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+    f = kit.models_dir() / "ggml-base.bin"
+    with open(f, "wb") as h:
+        h.truncate(inst.GGML_BYTES["base"])
+    monkeypatch.setattr(inst, "download_resumable", lambda *a, **k: pytest.fail("already complete"))
+    setup.download_model(Path("py"), "base")
+
+
+def test_mac_find_reports_whisper_cli(tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "which", lambda name, extra_dirs=(): "/opt/homebrew/bin/whisper-cli" if name == "whisper-cli" else None)
+    found = mac.find(tmp_path)
+    assert found["whisper-cli"] == "/opt/homebrew/bin/whisper-cli"
+    assert "whisper-cpp" not in mac.missing(found)
+    monkeypatch.setattr(inst, "which", lambda name, extra_dirs=(): None)
+    assert "whisper-cpp" in mac.missing(mac.find(tmp_path))
+
+
+def test_mac_plan_lists_whispercpp_and_ggml_size(monkeypatch):
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+    lines, mb = setup.plan("mac", "large-v3", with_cutout=False, gpu=None, have={})
+    text = "\n".join(lines)
+    assert "whisper.cpp" in text and "ggml-large-v3" in text and "3.1 GB" in text

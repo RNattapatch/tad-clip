@@ -12,6 +12,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from engine import kit
@@ -37,6 +40,10 @@ WHISPER_REPOS = {
 WHISPER_MB = {"tiny": 75, "base": 145, "small": 485, "medium": 1530, "large-v3-turbo": 1620, "turbo": 1620,
               "large-v1": 3090, "large-v2": 3090, "large-v3": 3090, "large": 3090}
 MODEL_FILES = ("model.bin", "config.json", "tokenizer.json")
+# whisper.cpp models (macOS backend, Metal) — exact sizes from huggingface.co/ggerganov/whisper.cpp, used to verify downloads
+GGML_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{model}.bin"
+GGML_BYTES = {"tiny": 77691713, "base": 147951465, "small": 487601967, "medium": 1533763059,
+              "large-v2": 3094623691, "large-v3": 3095033483, "large-v3-turbo": 1624555275}
 
 
 def utf8_stdio() -> None:
@@ -145,6 +152,83 @@ def model_dir(model: str, models: Path) -> Path | None:
     return None
 
 
+def asr_backend(cfg: dict = None) -> str:
+    """config.whisper.backend: auto → whisper.cpp (Metal) on macOS, faster-whisper elsewhere."""
+    if cfg is None:
+        try:
+            cfg = kit.load_config()
+        except ValueError:
+            cfg = {}
+    b = (cfg.get("whisper") or {}).get("backend") or "auto"
+    if b == "auto":
+        return "whispercpp" if kit.IS_MAC else "faster-whisper"
+    return b
+
+
+def ggml_path(model: str) -> Path:
+    return kit.models_dir() / f"ggml-{model}.bin"
+
+
+def ggml_state(model: str) -> tuple:
+    """(complete?, Thai reason) for models_dir()/ggml-<model>.bin."""
+    f = ggml_path(model)
+    if not f.is_file():
+        return False, f"ยังไม่ได้โหลด {f.name}"
+    want, have = GGML_BYTES.get(model), f.stat().st_size
+    if (want and have != want) or have < 1_000_000:
+        return False, f"{f.name} โหลดมาไม่ครบ ({have / 1e6:.0f} จาก {(want or 0) / 1e6:.0f} MB)"
+    return True, str(f)
+
+
+def download_resumable(url: str, dest, label: str, expected: int = None, tries: int = 4) -> Path:
+    """Big-file download that survives dropped connections: appends to <dest>.part with HTTP Range,
+    verifies the size the server reports (and `expected` when given), then renames into place."""
+    dest = Path(dest)
+    part = dest.with_name(dest.name + ".part")
+    last = None
+    for attempt in range(1, tries + 1):
+        have = part.stat().st_size if part.exists() else 0
+        req = urllib.request.Request(url, headers={"User-Agent": "tad-clip-setup", **({"Range": f"bytes={have}-"} if have else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                rng = r.headers.get("Content-Range") or ""
+                if have and getattr(r, "status", 200) == 206 and rng:
+                    total, mode = int(rng.rsplit("/", 1)[1]), "ab"
+                else:   # server sent the whole file → start over
+                    have, total, mode = 0, int(r.headers.get("Content-Length") or 0), "wb"
+                print(f"  โหลด {label} {total / 1e9:.2f} GB" + (f" (ต่อจากเดิม {have / 1e9:.2f} GB)" if have else "") + " …", flush=True)
+                got, step = have, 5
+                with open(part, mode) as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        got += len(chunk)
+                        if total and got * 100 // total >= step:
+                            print(f"    {got * 100 // total}% ({got >> 20} / {total >> 20} MB)", flush=True)
+                            step = got * 100 // total // 5 * 5 + 5
+        except urllib.error.HTTPError as e:
+            if e.code == 416 and expected and have == expected:   # already complete
+                os.replace(part, dest)
+                return dest
+            last = e
+        except OSError as e:   # dropped connection: keep the .part, the next try resumes it
+            last = e
+            time.sleep(2 * attempt)
+            continue
+        else:
+            size = part.stat().st_size if part.exists() else 0
+            want = expected or total
+            if want and size != want:
+                part.unlink()
+                raise kit.KitError(f"โหลด {label} ได้ขนาดไม่ตรง ({size} จาก {want} ไบต์) — สั่งติดตั้งใหม่อีกครั้ง")
+            os.replace(part, dest)
+            return dest
+        time.sleep(2 * attempt)
+    raise kit.KitError(f"โหลด {label} ไม่สำเร็จ ({last}) — เช็คอินเทอร์เน็ต แล้วสั่งติดตั้งใหม่ (ส่วนที่โหลดแล้วไม่หาย)")
+
+
 def chrome_candidates() -> list:
     """Browsers that can draw the cards, in the order the visual engine tries them (config first)."""
     found = []
@@ -209,14 +293,20 @@ def chrome_ready(browser: str, timeout: float = 20) -> tuple:
 
 
 def swiftc() -> str | None:
-    """Swift compiler for the Apple Vision cut-out (comes with Xcode Command Line Tools)."""
+    """Swift compiler for the Apple Vision cut-out, from Xcode Command Line Tools — or None.
+
+    /usr/bin/swiftc is a shim that exists even without CLT, so it proves nothing. `xcode-select -p` is asked first
+    because it never pops the "install developer tools" dialog; then `xcrun --find swiftc` gives the real compiler.
+    Compile with `xcrun swiftc …`: CLT's swiftc called by absolute path cannot find the Swift standard library.
+    """
     if not kit.IS_MAC:
         return None
-    found = shutil.which("swiftc")
-    if found:
-        return found
-    code, out = _out(["xcrun", "--find", "swiftc"], timeout=30)
-    return out.strip().splitlines()[-1] if code == 0 and out.strip() else None
+    code, out = _out(["xcode-select", "-p"], timeout=30)
+    if code != 0 or not out.strip():
+        return None
+    code, out = _out(["xcrun", "--find", "swiftc"], timeout=60)
+    path = out.strip().splitlines()[-1] if code == 0 and out.strip() else ""
+    return path if path and Path(path).is_file() else None
 
 
 def nvidia_gpu() -> str | None:

@@ -26,8 +26,8 @@ REAL_FFMPEG = _real("ffmpeg")
 REAL_FFPROBE = _real("ffprobe")
 HAS_LIBASS = bool(REAL_FFMPEG) and inst.has_libass(REAL_FFMPEG)
 
-FULL_IDS = ["setup", "ffmpeg", "ffprobe", "node", "python", "model", "chrome", "ytdlp", "cutout", "disk", "ram"]
-QUICK_IDS = ["setup", "ffmpeg", "ffprobe", "node", "python", "model", "chrome"]
+FULL_IDS = ["setup", "ffmpeg", "ffprobe", "node", "python", "asr", "model", "chrome", "ytdlp", "cutout", "disk", "ram"]
+QUICK_IDS = ["setup", "ffmpeg", "ffprobe", "node", "python", "asr", "model", "chrome"]
 QC_IDS = ["duration", "size", "audio", "black", "peak"]
 CHECK_KEYS = {"id", "name", "status", "detail", "fix"}
 
@@ -143,26 +143,95 @@ def _fake_model(models: Path, repo="models--Systran--faster-whisper-base", files
     return snap
 
 
-def test_model_present_is_green():
+@pytest.fixture
+def fw(monkeypatch):
+    """faster-whisper backend regardless of OS (macOS defaults to whisper.cpp)."""
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "faster-whisper")
+
+
+def test_model_present_is_green(fw):
     kit.save_config({"whisper": {"model": "base"}})
     _fake_model(kit.models_dir())
     c = doctor.check_model()
     assert c["status"] == "ok", c
 
 
-def test_turbo_model_maps_to_its_repo():
+def test_turbo_model_maps_to_its_repo(fw):
     kit.save_config({"whisper": {"model": "large-v3-turbo"}})
     _fake_model(kit.models_dir(), "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo")
     assert doctor.check_model()["status"] == "ok"
 
 
-def test_half_downloaded_model_is_red_with_model_in_fix():
+def test_half_downloaded_model_is_red_with_model_in_fix(fw):
     kit.save_config({"whisper": {"model": "base"}})
     _fake_model(kit.models_dir(), files=("config.json",))
     c = doctor.check_model()
     assert c["status"] == "fail"
     assert "base" in c["detail"]
     assert "--model base" in c["fix"]
+
+
+# ---------------------------------------------------------------- whisper.cpp (macOS backend)
+@pytest.fixture
+def wcpp(monkeypatch):
+    monkeypatch.setattr(inst, "asr_backend", lambda cfg=None: "whispercpp")
+
+
+def _ggml(model="base", size=None):
+    f = kit.models_dir() / f"ggml-{model}.bin"
+    with open(f, "wb") as h:
+        h.truncate(size if size is not None else inst.GGML_BYTES[model])   # sparse: instant, no disk used
+    return f
+
+
+def test_backend_auto_is_whispercpp_on_mac_only(monkeypatch):
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    assert inst.asr_backend({"whisper": {"backend": "auto"}}) == "whispercpp"
+    assert inst.asr_backend({"whisper": {}}) == "whispercpp"
+    assert inst.asr_backend({"whisper": {"backend": "faster-whisper"}}) == "faster-whisper"
+    monkeypatch.setattr(kit, "IS_MAC", False)
+    assert inst.asr_backend({"whisper": {"backend": "auto"}}) == "faster-whisper"
+
+
+def test_whispercpp_model_complete_is_green(wcpp):
+    kit.save_config({"whisper": {"model": "base"}})
+    _ggml()
+    c = doctor.check_model()
+    assert c["status"] == "ok" and "whisper.cpp" in c["name"]
+
+
+def test_whispercpp_model_cut_short_is_red(wcpp):
+    kit.save_config({"whisper": {"model": "large-v3"}})
+    _ggml("large-v3", size=1_000_000)
+    c = doctor.check_model()
+    assert c["status"] == "fail"
+    assert "ไม่ครบ" in c["detail"] and "--model large-v3" in c["fix"]
+
+
+def test_whispercpp_model_missing_is_red(wcpp):
+    kit.save_config({"whisper": {"model": "medium"}})
+    c = doctor.check_model()
+    assert c["status"] == "fail" and "ggml-medium.bin" in c["detail"]
+
+
+def test_asr_check_runs_whisper_cli(wcpp, tmp_path):
+    kit.save_config({"tools": {"whisper-cli": fake_exe(tmp_path / "bin", "whisper-cli", 'sys.exit(0 if "--help" in args else 5)\n')}})
+    c = doctor.check_asr()
+    assert c["status"] == "ok" and "whisper.cpp" in c["detail"]
+
+
+def test_asr_check_missing_whisper_cli_is_red_with_brew_fix(wcpp, tmp_path, monkeypatch):
+    monkeypatch.setattr(doctor, "_os", lambda: "mac")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    c = doctor.check_asr()
+    assert c["status"] == "fail"
+    assert "brew install whisper-cpp" in c["fix"]
+
+
+def test_asr_check_faster_whisper_names_the_device(fw):
+    kit.save_config({"whisper": {"device": "cpu"}})
+    c = doctor.check_asr()
+    assert c["status"] == "ok" and "faster-whisper" in c["detail"] and "cpu" in c["detail"]
 
 
 # ---------------------------------------------------------------- chrome / edge
@@ -218,12 +287,36 @@ def test_low_disk_warns(monkeypatch):
     assert "15" in c["detail"]
 
 
-def test_mac_without_swiftc_warns_with_xcode_select(monkeypatch):
+def test_mac_without_command_line_tools_is_red_with_xcode_select(monkeypatch):
     monkeypatch.setattr(doctor, "_os", lambda: "mac")
     monkeypatch.setattr(inst, "swiftc", lambda: None)
     c = doctor.check_cutout()
-    assert c["status"] == "warn"
-    assert "xcode-select --install" in c["fix"]
+    assert c["status"] == "fail"
+    assert "Command Line Tools" in c["detail"]
+    assert c["fix"] == "xcode-select --install"
+
+
+def test_swiftc_ignores_the_usr_bin_shim_without_clt(monkeypatch):
+    """/usr/bin/swiftc exists even with no Command Line Tools — only xcode-select/xcrun tell the truth."""
+    calls = []
+
+    def fake_out(cmd, timeout=60):
+        calls.append([str(c) for c in cmd])
+        return (2, "xcode-select: error: unable to get active developer directory") if cmd[0] == "xcode-select" else (0, "")
+
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    monkeypatch.setattr(inst, "_out", fake_out)
+    assert inst.swiftc() is None
+    assert calls == [["xcode-select", "-p"]]          # never runs xcrun (that pops the install dialog)
+
+
+def test_swiftc_found_through_xcrun(monkeypatch, tmp_path):
+    sw = tmp_path / "swiftc"
+    sw.write_text("x")
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    monkeypatch.setattr(inst, "_out", lambda cmd, timeout=60: (0, "/Library/Developer/CommandLineTools\n")
+                        if cmd[0] == "xcode-select" else (0, f"{sw}\n"))
+    assert inst.swiftc() == str(sw)
 
 
 def test_windows_without_cutout_addon_is_info_only(monkeypatch):

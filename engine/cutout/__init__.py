@@ -8,8 +8,9 @@ Engines (config.cutout.engine — "auto" = vision on macOS, tb elsewhere when in
   tb      transparent-background (InSPyReNet) from the kit venv · ~30 s per 1 s on Apple MPS, faster on
           an NVIDIA GPU, much slower on CPU · use when vision breaks (fingers turn see-through, edges
           fall apart, a mic or prop in the hand disappears) or for production work.
-          Do not use its "fast" mode — quality drops visibly. TAD_CLIP_TB_PYTHON overrides which python
-          runs it (a separate venv that already has transparent-background + torch).
+          Do not use its "fast" mode — quality drops visibly.
+          Dev/testing only: env TAD_CLIP_TB_PYTHON points tb at another python (a separate venv that already has
+          transparent-background + torch) instead of the kit venv. Not user-facing.
 Output: .mov = ProRes 4444 (yuva444p10le) for editors · .webm = VP9 with alpha (~1/30 the size; compose cache).
 """
 import json
@@ -153,33 +154,49 @@ def _alphamerge(color: Path, matte_input: list, rate: str, out: Path, **popen_kw
 
 # ---------------------------------------------------------------- vision (macOS)
 
+def swiftc_path() -> str | None:
+    """The real Swift compiler, or None. /usr/bin/swiftc is a shim present on every Mac even without the
+    Xcode Command Line Tools, so `shutil.which` proves nothing — `xcrun --find swiftc` fails when they are missing."""
+    try:
+        r = subprocess.run(["xcrun", "--find", "swiftc"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    found = (r.stdout or "").strip().splitlines()
+    return found[-1] if r.returncode == 0 and found else None
+
+
 def vision_bin() -> Path:
     if not IS_MAC:
         raise KitError("ตัวตัดพื้นหลัง vision ใช้ได้เฉพาะ Mac — บน Windows ใช้ tb (ติดตั้งเพิ่มด้วย setup --with-cutout) หรือใช้ layout split แทน")
     bin_ = kit.cache_dir() / "vision-matte"
     if needs_compile(bin_, SWIFT_SRC):
-        swiftc = shutil.which("swiftc")
+        swiftc = swiftc_path()
         if not swiftc:
-            raise KitError("ต้องมี Xcode Command Line Tools สำหรับตัดพื้นหลัง — เปิด Terminal แล้วพิมพ์: xcode-select --install")
+            raise KitError("ตัดพื้นหลังด้วย Apple Vision ต้องมี Xcode Command Line Tools — เปิด Terminal แล้วพิมพ์: xcode-select --install "
+                           "(กดติดตั้งในหน้าต่างที่เด้งขึ้น แล้วรันใหม่) · หรือใช้ layout split แทน")
         tmp = bin_.with_name(f"vision-matte.build-{os.getpid()}")
-        kit.run([swiftc, "-O", str(SWIFT_SRC), "-o", str(tmp)])
+        # compile through xcrun: it sets SDKROOT — the compiler run by its absolute path cannot find the Swift stdlib
+        kit.run(["xcrun", "swiftc", "-O", str(SWIFT_SRC), "-o", str(tmp)])
         os.replace(tmp, bin_)   # atomic: two renders compiling at once never see a half-written binary
     return bin_
 
 
 def _vision(src: Path, out: Path, info: dict) -> None:
     w, h, rate = info["width"], info["height"], _rate(info)
-    matte = subprocess.Popen([str(vision_bin()), str(src), "accurate"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    cmd = _alphamerge(src, ["-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{w}x{h}", "-r", rate, "-i", "-"], rate, out)
-    ff = subprocess.Popen(cmd, stdin=matte.stdout, stderr=subprocess.PIPE)
-    matte.stdout.close()   # ffmpeg owns the pipe now; vision gets SIGPIPE if ffmpeg dies
-    _, ff_err = ff.communicate()
-    v_err = matte.stderr.read()
-    matte.wait()
-    if matte.returncode != 0:
-        raise KitError("Apple Vision ตัดพื้นหลังไม่สำเร็จ\n" + v_err.decode("utf-8", "replace")[-2000:])
-    if ff.returncode != 0:
-        raise KitError("ffmpeg รวมพื้นใสไม่สำเร็จ\n" + ff_err.decode("utf-8", "replace")[-2000:])
+    # both stderr streams go to temp files, never to pipes read after the fact: a tool that logs more than the
+    # ~64 KB pipe buffer would block on stderr while ffmpeg waits for its stdout → deadlock
+    with tempfile.TemporaryFile() as v_log, tempfile.TemporaryFile() as ff_log:
+        matte = subprocess.Popen([str(vision_bin()), str(src), "accurate"], stdout=subprocess.PIPE, stderr=v_log)
+        cmd = _alphamerge(src, ["-f", "rawvideo", "-pix_fmt", "gray", "-s", f"{w}x{h}", "-r", rate, "-i", "-"], rate, out)
+        ff = subprocess.Popen(cmd, stdin=matte.stdout, stderr=ff_log)
+        matte.stdout.close()   # ffmpeg owns the pipe now; vision gets SIGPIPE if ffmpeg dies
+        ff.wait()
+        matte.wait()
+        tail = lambda f: (f.seek(0), f.read()[-2000:].decode("utf-8", "replace"))[1]
+        if matte.returncode != 0:
+            raise KitError("Apple Vision ตัดพื้นหลังไม่สำเร็จ\n" + tail(v_log))
+        if ff.returncode != 0:
+            raise KitError("ffmpeg รวมพื้นใสไม่สำเร็จ\n" + tail(ff_log))
 
 
 # ---------------------------------------------------------------- tb (transparent-background)

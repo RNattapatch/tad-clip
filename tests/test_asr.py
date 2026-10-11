@@ -1,11 +1,14 @@
 """Tests for engine/asr.py — model loading rules, whisper.cpp -ojf output shape, CLI skip rules.
 
-Fast tests use a fake model. The one `slow` test runs the real faster-whisper model named by env
-TAD_CLIP_TEST_MODEL (default `base`) from the models folder of TAD_CLIP_HOME, so run it like this:
-  TAD_CLIP_HOME=~/.tad-clip-dev ~/.tad-clip-dev/venv/bin/python -m pytest tests/test_asr.py -q
-Skip it with:  -m "not slow"
+Fast tests use a fake model / fake whisper-cli. The `slow` tests run the real thing:
+  * faster-whisper model named by env TAD_CLIP_TEST_MODEL (default `base`) from the models folder of TAD_CLIP_HOME
+  * whisper.cpp (macOS only): needs `whisper-cli` and a ggml file; point env TAD_CLIP_GGML at one, e.g.
+    TAD_CLIP_GGML=~/.claude/models/ggml-large-v3.bin (skipped when either is missing)
+Run:   TAD_CLIP_HOME=~/.tad-clip-dev ~/.tad-clip-dev/venv/bin/python -m pytest tests/test_asr.py -q
+Skip the slow ones with:  -m "not slow"
 """
 import json
+import re
 import shutil
 import sys
 import wave
@@ -21,6 +24,14 @@ from engine import asr, kit  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "คลิป ทดสอบ.mp4"
 SR = 16000
+REAL_BACKEND_CHOICE = asr.backend_choice
+
+
+@pytest.fixture(autouse=True)
+def faster_whisper_unless_asked(request, monkeypatch):
+    """The fast tests below exercise the faster-whisper path whatever whisper-cli/ggml this machine has."""
+    if "real_backend" not in request.fixturenames:
+        monkeypatch.setattr(asr, "backend_choice", lambda: ("faster-whisper", False))
 
 
 # ---------------------------------------------------------------- helpers
@@ -96,6 +107,7 @@ def isolated_home(tmp_path, monkeypatch):
     tools = kit.load_config()["tools"]
     monkeypatch.setenv("TAD_CLIP_HOME", str(tmp_path / "ที่เก็บ home"))
     monkeypatch.delenv("TAD_CLIP_MODEL", raising=False)
+    monkeypatch.setattr(asr, "_FORCE_CPU", False)
     kit.save_config({"tools": tools})
     asr._load_cached.cache_clear()
     yield tmp_path / "ที่เก็บ home"
@@ -171,13 +183,87 @@ def test_missing_model_falls_back_to_download_then_gives_a_thai_error(monkeypatc
 
     def boom(name, **kw):
         seen.append(kw.get("local_files_only"))
-        raise OSError("no network")
+        raise FileNotFoundError("not cached") if kw.get("local_files_only") else OSError("no network")
 
     monkeypatch.setattr(faster_whisper, "WhisperModel", boom)
     with pytest.raises(kit.KitError) as e:
         asr.load_model()
     assert seen == [True, False]
     assert "large-v3" in str(e.value) and "อินเทอร์เน็ต" in str(e.value)
+
+
+def test_only_the_not_cached_error_triggers_a_download(monkeypatch, isolated_home):
+    """An out-of-memory / bad compute type at load time must not be reported as 'needs internet'."""
+    import faster_whisper
+    _cuda(monkeypatch, 0)
+    seen = []
+
+    def boom(name, **kw):
+        seen.append(kw.get("local_files_only"))
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", boom)
+    with pytest.raises(kit.KitError) as e:
+        asr.load_model()
+    assert seen == [True]                                   # never went looking on the network
+    assert "อินเทอร์เน็ต" not in str(e.value) and "out of memory" in str(e.value)
+
+
+def test_cuda_failure_at_load_falls_back_to_cpu_int8_with_a_thai_notice(monkeypatch, isolated_home, capsys):
+    import faster_whisper
+    _cuda(monkeypatch, 1)
+    built = []
+
+    def maybe(name, **kw):
+        built.append((kw["device"], kw["compute_type"]))
+        if kw["device"] == "cuda":
+            raise RuntimeError("CUDA failed with error out of memory")
+        return RecorderModel(name, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", maybe)
+    m = asr.load_model()
+    assert (m.kw["device"], m.kw["compute_type"]) == ("cpu", "int8")
+    assert built == [("cuda", "float16"), ("cpu", "int8")]
+    err = capsys.readouterr().err
+    assert "CUDA" in err and "CPU" in err
+    assert asr.load_model() is m                           # and it stays on cpu for the rest of the process
+    assert asr.settings()[1:] == ("cpu", "int8")
+
+
+def test_cuda_failure_on_first_inference_reloads_on_cpu(media, monkeypatch, isolated_home, capsys):
+    import faster_whisper
+    _cuda(monkeypatch, 1)
+    RecorderModel.instances = []
+    good = FakeModel()
+
+    class Flaky(RecorderModel):
+        def transcribe(self, audio, **kw):
+            if self.kw["device"] == "cuda":
+                def gen():
+                    raise RuntimeError("Library libcudnn_ops.so.9 is not found or cannot be loaded")
+                    yield
+                return gen(), NS(language="th")
+            return good.transcribe(audio, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Flaky)
+    d = asr.transcribe(media)
+    assert_ojf_schema(d)
+    assert [i.kw["device"] for i in RecorderModel.instances] == ["cuda", "cpu"]
+    assert "CPU" in capsys.readouterr().err
+
+
+def test_runtime_error_on_cpu_is_a_thai_error_not_a_traceback(media, monkeypatch, isolated_home):
+    import faster_whisper
+    _cuda(monkeypatch, 0)
+
+    class Broken(RecorderModel):
+        def transcribe(self, audio, **kw):
+            raise RuntimeError("something native broke")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Broken)
+    with pytest.raises(kit.KitError) as e:
+        asr.transcribe(media)
+    assert "something native broke" in str(e.value)
 
 
 # ---------------------------------------------------------------- transcribe
@@ -314,13 +400,329 @@ def test_cli_prompt_flag_wins_and_config_hint_is_the_default(media, tmp_path, mo
     cfg = kit.load_config()
     kit.save_config({"tools": cfg["tools"], "glossary": {"prompt_hint": "จากคอนฟิก"}})
     asr.main(["transcribe", str(media), "--out", str(tmp_path / "b.json")])
-    assert [kw["initial_prompt"] for _, kw in m.calls] == ["จากคำสั่ง", "จากคอนฟิก"]
+    first, second = [kw["initial_prompt"] for _, kw in m.calls]
+    assert first == "จากคำสั่ง"
+    assert second.endswith(", จากคอนฟิก") and second.startswith(base_hint())   # shipped Thai hint + the user's own
+
+
+def base_hint():
+    return json.loads((ROOT / "engine" / "subs" / "glossary-base.json").read_text(encoding="utf-8"))["prompt_hint"]
+
+
+def test_glossary_prompt_merges_the_shipped_hint_with_the_users(isolated_home):
+    assert asr.glossary_prompt() == base_hint()
+    cfg = kit.load_config()
+    kit.save_config({"tools": cfg["tools"], "glossary": {"prompt_hint": "ชื่อแบรนด์ Black Pan"}})
+    assert asr.glossary_prompt() == base_hint() + ", ชื่อแบรนด์ Black Pan"
 
 
 def test_cli_missing_file_is_a_thai_message(tmp_path, capsys):
     assert asr.main(["transcribe", str(tmp_path / "ไม่มี.mp4"), "--out", str(tmp_path / "a.json")]) == 1
     err = capsys.readouterr().err
     assert "ไม่พบไฟล์" in err and "Traceback" not in err
+
+
+# ---------------------------------------------------------------- whisper.cpp: token normaliser
+
+def cpp_json(segments):
+    """Bytes shaped like `whisper-cli -ojf`: token texts are written raw, so a Thai character split across two
+    tokens makes the file invalid UTF-8 as a whole (exactly what the real tool does)."""
+    segs = []
+    for (a, b), toks in segments:
+        parts = []
+        for tx, f, to in toks:
+            raw = tx if isinstance(tx, bytes) else tx.encode("utf-8")
+            parts.append(b'{"text":"' + raw + b'","timestamps":{"from":"00:00:00,000","to":"00:00:00,000"},'
+                         b'"offsets":{"from":%d,"to":%d},"id":1,"p":0.9,"t_dtw":-1}' % (f, to))
+        text = b"".join((tx if isinstance(tx, bytes) else tx.encode()) for tx, _, _ in toks if not (isinstance(tx, str) and tx.startswith("[_")))
+        segs.append(b'{"timestamps":{"from":"x","to":"y"},"offsets":{"from":%d,"to":%d},"text":"' % (a, b) + text
+                    + b'","tokens":[' + b",".join(parts) + b"]}")
+    return b'{"systeminfo":"x","model":{"type":"large"},"result":{"language":"th"},"transcription":[' + b",".join(segs) + b"]}"
+
+
+def test_normalizer_merges_a_character_split_across_tokens():
+    fru = "ฤ".encode()                                    # e0 b8 a4
+    raw = cpp_json([((0, 2000), [("[_BEG_]", 0, 0), ("วิก", 100, 400), (fru[:2], 400, 400), (fru[2:], 400, 480),
+                                 ("ต", 480, 600), ("[_TT_150]", 600, 600)])])
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("utf-8")                              # the fixture really is invalid UTF-8
+    d = asr.normalize_cpp(raw)
+    assert_ojf_schema(d)
+    (seg,) = d["transcription"]
+    assert [t["text"] for t in seg["tokens"]] == ["วิก", "ฤ", "ต"]
+    assert seg["tokens"][1]["offsets"] == {"from": 400, "to": 480}   # first token's from, last token's to
+    assert seg["text"] == "วิกฤต" and seg["offsets"] == {"from": 0, "to": 2000}
+
+
+def test_normalizer_merges_one_byte_tokens_and_keeps_whole_character_tokens():
+    b = "ก".encode()
+    raw = cpp_json([((0, 900), [(bytes([b[0]]), 10, 20), (bytes([b[1]]), 20, 30), (bytes([b[2]]), 30, 50),
+                                ("เพ", 50, 150), ("ื่", 150, 200), ("อ", 200, 300), (" Black", 300, 500)])])
+    (seg,) = asr.normalize_cpp(raw)["transcription"]
+    assert [(t["text"], t["offsets"]["from"], t["offsets"]["to"]) for t in seg["tokens"]] == [
+        ("ก", 10, 50), ("เพ", 50, 150), ("ื่", 150, 200), ("อ", 200, 300), (" Black", 300, 500)]
+    assert seg["text"] == "กเพื่อ Black"
+
+
+def test_normalizer_drops_special_tokens_and_whisper_extras():
+    raw = cpp_json([((0, 500), [("[_BEG_]", 0, 0), ("สวัสดี", 0, 300), ("[_TT_25]", 500, 500), ("[_EOT_]", 500, 500)])])
+    d = asr.normalize_cpp(raw)
+    assert d == {"transcription": [{"offsets": {"from": 0, "to": 500}, "text": "สวัสดี",
+                                    "tokens": [{"text": "สวัสดี", "offsets": {"from": 0, "to": 300}}]}]}
+
+
+def test_normalizer_carries_a_split_character_into_the_next_segment():
+    fru = "ฤ".encode()
+    raw = cpp_json([((0, 1000), [("วิก", 0, 400), (fru[:2], 400, 450)]), ((1000, 2000), [(fru[2:], 1000, 1100), ("ต", 1100, 1300)])])
+    a, b = asr.normalize_cpp(raw)["transcription"]
+    assert [t["text"] for t in a["tokens"]] == ["วิก"] and a["text"] == "วิก"
+    assert [t["text"] for t in b["tokens"]] == ["ฤ", "ต"] and b["tokens"][0]["offsets"] == {"from": 400, "to": 1100}
+
+
+def test_normalizer_throws_away_stray_and_dangling_bytes():
+    raw = cpp_json([((0, 800), [(b"\xa4", 0, 10), ("ก", 10, 100), (b"\xe0\xb8", 100, 120), (b"abc", 120, 200), ("ข", 200, 300),
+                                (b"\xe0\xb8", 300, 320)])])
+    (seg,) = asr.normalize_cpp(raw)["transcription"]
+    assert "".join(t["text"] for t in seg["tokens"]) == "กabcข"
+    assert "�" not in seg["text"]
+
+
+def test_normalizer_output_is_clean_json_and_utf8():
+    fru = "ฤ".encode()
+    d = asr.normalize_cpp(cpp_json([((0, 500), [(fru[:1], 0, 10), (fru[1:], 10, 20), ("ก", 20, 90)])]))
+    blob = json.dumps(d, ensure_ascii=False).encode("utf-8")           # would raise on a lone surrogate
+    assert json.loads(blob.decode("utf-8")) == d
+
+
+def test_normalizer_keeps_a_token_less_segment_as_one_token():
+    raw = cpp_json([((0, 500), [])]).replace(b'"text":""', "\"text\":\"ว่างเปล่า\"".encode())
+    (seg,) = asr.normalize_cpp(raw)["transcription"]
+    assert seg["tokens"] == [{"text": "ว่างเปล่า", "offsets": {"from": 0, "to": 500}}]
+
+
+def test_normalised_output_feeds_make_subs_unchanged():
+    ms = pytest.importorskip("engine.subs.make_subs")
+    fru = "ฤ".encode()
+    raw = cpp_json([((0, 3000), [("[_BEG_]", 0, 0), ("เพื่อ", 0, 400), ("แก้", 400, 700), ("ไข", 700, 900), ("วิก", 900, 1200),
+                                 (fru[:2], 1200, 1200), (fru[2:], 1200, 1400), ("ต", 1400, 1500), ("[_TT_150]", 1500, 1500)])])
+    cues, _ = ms.build_cues(asr.normalize_cpp(raw), ms.load_glossary(None), 22)
+    assert "วิกฤต" in "".join(c["t"] for c in cues)
+
+
+# ---------------------------------------------------------------- whisper.cpp: backend choice
+
+@pytest.fixture
+def real_backend(isolated_home, monkeypatch):
+    monkeypatch.setattr(asr, "backend_choice", REAL_BACKEND_CHOICE)
+    monkeypatch.delenv("TAD_CLIP_GGML", raising=False)
+    return isolated_home
+
+
+def _tool(monkeypatch, cli="/fake/bin/whisper-cli"):
+    real = kit.tool
+
+    def fake(name):
+        if name == "whisper-cli":
+            if cli is None:
+                raise kit.KitError("ไม่พบโปรแกรม whisper-cli")
+            return cli
+        return real(name)
+
+    monkeypatch.setattr(kit, "tool", fake)
+
+
+def _ggml(home, name="large-v3"):
+    f = kit.models_dir() / f"ggml-{name}.bin"
+    f.write_bytes(b"x")
+    return f
+
+
+def _config(**whisper):
+    kit.save_config({"tools": kit.load_config()["tools"], "whisper": whisper})
+
+
+def test_auto_picks_whispercpp_on_a_mac_with_cli_and_model(real_backend, monkeypatch):
+    _tool(monkeypatch)
+    _ggml(real_backend)
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    assert asr.backend_choice() == ("whispercpp", False)
+
+
+@pytest.mark.parametrize("why", ["no-cli", "no-ggml", "not-mac"])
+def test_auto_falls_back_to_faster_whisper(real_backend, monkeypatch, why):
+    _tool(monkeypatch, None if why == "no-cli" else "/fake/bin/whisper-cli")
+    if why != "no-ggml":
+        _ggml(real_backend)
+    monkeypatch.setattr(kit, "IS_MAC", why != "not-mac")
+    assert asr.backend_choice() == ("faster-whisper", False)
+
+
+def test_config_can_force_either_backend(real_backend, monkeypatch):
+    _tool(monkeypatch)
+    _ggml(real_backend)
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    _config(backend="faster-whisper")
+    assert asr.backend_choice() == ("faster-whisper", True)
+    _config(backend="whispercpp")
+    assert asr.backend_choice() == ("whispercpp", True)
+    monkeypatch.setattr(kit, "IS_MAC", False)                     # explicit choice works on any OS
+    assert asr.backend_choice() == ("whispercpp", True)
+
+
+def test_forcing_whispercpp_without_its_parts_is_a_thai_error(real_backend, monkeypatch):
+    _tool(monkeypatch, None)
+    _config(backend="whispercpp")
+    with pytest.raises(kit.KitError) as e:
+        asr.backend_choice()
+    assert "whisper-cli" in str(e.value) and "faster-whisper" in str(e.value)
+    _tool(monkeypatch)                                            # cli found, ggml missing
+    with pytest.raises(kit.KitError) as e:
+        asr.backend_choice()
+    assert "ggml-large-v3.bin" in str(e.value)
+
+
+def test_unknown_backend_name_is_a_thai_error(real_backend):
+    _config(backend="nonsense")
+    with pytest.raises(kit.KitError) as e:
+        asr.backend_choice()
+    assert "nonsense" in str(e.value)
+
+
+def test_ggml_path_follows_the_model_name_and_env(real_backend, monkeypatch, tmp_path):
+    assert asr.ggml_path() == kit.models_dir() / "ggml-large-v3.bin"
+    monkeypatch.setenv("TAD_CLIP_MODEL", "large-v3-turbo")
+    assert asr.ggml_path() == kit.models_dir() / "ggml-large-v3-turbo.bin"
+    monkeypatch.setenv("TAD_CLIP_GGML", str(tmp_path / "ที่อื่น" / "my.bin"))
+    assert asr.ggml_path() == tmp_path / "ที่อื่น" / "my.bin"
+
+
+@pytest.mark.parametrize("model,preset", [("large-v3", "large.v3"), ("large-v3-turbo", "large.v3.turbo"), ("turbo", "large.v3.turbo"),
+                                          ("large-v2", "large.v2"), ("medium", "medium"), ("small", "small"), ("base", "base"),
+                                          ("tiny", "tiny"), ("small.en", "small.en"), ("distil-large-v3", None)])
+def test_dtw_preset(model, preset):
+    assert asr.dtw_preset(model) == preset
+
+
+# ---------------------------------------------------------------- whisper.cpp: commands
+
+class FakeCli:
+    """Stands in for kit.run when the command is whisper-cli: records it and writes the files the real tool would."""
+    def __init__(self, monkeypatch, asr_json=None, texts=None, fail=None):
+        self.cmds, self.asr_json, self.texts, self.fail = [], asr_json, texts or {}, fail
+        real = kit.run
+
+        def run(cmd, **kw):
+            cmd = [str(c) for c in cmd]
+            if Path(cmd[0]).name != "whisper-cli":
+                return real(cmd, **kw)
+            self.cmds.append((cmd, kw))
+            if self.fail:
+                raise kit.KitError(self.fail)
+            if "-ojf" in cmd:
+                Path(cmd[cmd.index("-of") + 1] + ".json").write_bytes(self.asr_json)
+            for i, a in enumerate(cmd):
+                if a == "-f":
+                    wav = Path(cmd[i + 1])
+                    (wav.parent / (wav.name + ".txt")).write_bytes(self.texts.get(wav.name, b""))
+            return NS(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(kit, "run", run)
+
+
+@pytest.fixture
+def cpp(real_backend, monkeypatch, tmp_path):
+    _tool(monkeypatch)
+    monkeypatch.setattr(kit, "IS_MAC", True)
+    return _ggml(real_backend)
+
+
+def test_whole_clip_command_is_exactly_the_agreed_one(cpp, media, monkeypatch):
+    fake = FakeCli(monkeypatch, asr_json=cpp_json([((0, 1000), [("[_BEG_]", 0, 0), ("สวัสดี", 0, 500)])]))
+    d = asr.transcribe(media, prompt="คำใบ้ Black Pan")
+    assert_ojf_schema(d)
+    ((cmd, kw),) = fake.cmds
+    out = cmd[cmd.index("-of") + 1]
+    wav = cmd[cmd.index("-f") + 1]
+    assert wav.endswith("audio.wav") and Path(out).name == "asr" and Path(out).parent == Path(wav).parent
+    assert cmd == ["/fake/bin/whisper-cli", "-m", str(cpp), "-f", wav, "-l", "th", "-nfa", "-dtw", "large.v3", "-bs", "5", "-sns",
+                   "--prompt", "คำใบ้ Black Pan", "-ojf", "-of", out, "-np"]
+    assert kw.get("stdin") is not None                             # never waits on the terminal
+    assert d["transcription"][0]["tokens"] == [{"text": "สวัสดี", "offsets": {"from": 0, "to": 500}}]
+
+
+def test_whole_clip_without_prompt_or_dtw_preset_omits_those_flags(cpp, media, monkeypatch):
+    monkeypatch.setenv("TAD_CLIP_MODEL", "distil-large-v3")
+    monkeypatch.setenv("TAD_CLIP_GGML", str(cpp))
+    fake = FakeCli(monkeypatch, asr_json=cpp_json([((0, 1000), [("ก", 0, 500)])]))
+    asr.transcribe(media)
+    (cmd, _), = fake.cmds
+    assert "--prompt" not in cmd and "-dtw" not in cmd and "-nfa" not in cmd
+    assert cmd[1:3] == ["-m", str(cpp)]
+
+
+def test_whole_clip_uses_the_env_ggml_override(cpp, media, monkeypatch, tmp_path):
+    other = tmp_path / "ที่เก็บ อื่น" / "ggml-large-v3.bin"
+    other.parent.mkdir()
+    other.write_bytes(b"x")
+    monkeypatch.setenv("TAD_CLIP_GGML", str(other))
+    fake = FakeCli(monkeypatch, asr_json=cpp_json([((0, 1000), [("ก", 0, 500)])]))
+    asr.transcribe(media)
+    assert fake.cmds[0][0][2] == str(other)
+
+
+def test_per_phrase_command_is_one_run_for_all_files(cpp, tmp_path, monkeypatch):
+    wavs = [make_wav(tmp_path / f"p{i:03d}.wav", 0.5) for i in range(3)]
+    fake = FakeCli(monkeypatch, texts={"p000.wav": "ข้อ หนึ่ง\n".encode(), "p001.wav": b"", "p002.wav": " สาม \nบรรทัดสอง\n".encode()})
+    out = asr.transcribe_many(wavs)
+    assert out == ["ข้อ หนึ่ง", "", "สาม บรรทัดสอง"]
+    ((cmd, _),) = fake.cmds
+    assert cmd[:10] == ["/fake/bin/whisper-cli", "-m", str(cpp), "-l", "th", "-nt", "-otxt", "-np", "-mc", "0"]
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "-f"] == [str(w) for w in wavs]
+
+
+def test_per_phrase_text_with_a_split_character_is_decoded_tolerantly(cpp, tmp_path, monkeypatch):
+    wav = make_wav(tmp_path / "p000.wav", 0.5)
+    FakeCli(monkeypatch, texts={"p000.wav": "ก".encode() + "ฤ".encode()[:2] + b"\n"})
+    assert asr.transcribe_many([wav]) == ["ก"]
+
+
+def test_auto_mode_falls_back_to_faster_whisper_when_whisper_cli_fails(cpp, media, monkeypatch, capsys):
+    FakeCli(monkeypatch, fail="คำสั่ง whisper-cli ล้มเหลว (exit 1)")
+    m = FakeModel()
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: m)
+    assert_ojf_schema(asr.transcribe(media))
+    assert len(m.calls) == 1 and "faster-whisper" in capsys.readouterr().err
+
+
+def test_explicit_whispercpp_does_not_fall_back(cpp, media, monkeypatch):
+    _config(backend="whispercpp")
+    FakeCli(monkeypatch, fail="คำสั่ง whisper-cli ล้มเหลว (exit 1)")
+    monkeypatch.setattr(asr, "load_model", lambda *a, **k: pytest.fail("fell back"))
+    with pytest.raises(kit.KitError):
+        asr.transcribe(media)
+
+
+def test_cli_banner_names_the_backend(cpp, media, tmp_path, monkeypatch, capsys):
+    FakeCli(monkeypatch, asr_json=cpp_json([((0, 1000), [("สวัสดี", 0, 500)])]))
+    assert asr.main(["transcribe", str(media), "--out", str(tmp_path / "a.json")]) == 0
+    assert "whisper.cpp" in capsys.readouterr().err
+    assert_ojf_schema(json.loads((tmp_path / "a.json").read_text(encoding="utf-8")))
+
+
+# ---------------------------------------------------------------- ffmpeg hygiene
+
+def test_every_ffmpeg_call_has_nostdin(media, fake_model, monkeypatch):
+    seen = []
+    real = kit.run
+
+    def spy(cmd, **kw):
+        seen.append([str(c) for c in cmd])
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(kit, "run", spy)
+    asr.transcribe(media)
+    ff = [c for c in seen if Path(c[0]).stem == "ffmpeg"]
+    assert ff and all("-nostdin" in c for c in ff)
 
 
 # ---------------------------------------------------------------- real model (slow)
@@ -336,3 +738,38 @@ def test_real_model_output_passes_the_schema(monkeypatch):
     if model not in {"tiny", "base", "small"}:  # the small models often hear nothing at all in this Thai clip
         text = "".join(s["text"] for s in d["transcription"])
         assert any("\u0e00" <= c <= "\u0e7f" for c in text), f"no Thai text recognised: {text!r}"
+
+
+def _need_cpp():
+    if not kit.IS_MAC:
+        pytest.skip("whisper.cpp backend is macOS-only")
+    if asr.cpp_ready() is None:
+        pytest.skip("needs whisper-cli and a ggml model (set TAD_CLIP_GGML=/path/ggml-large-v3.bin)")
+
+
+@pytest.mark.slow
+def test_real_whispercpp_backend_on_the_fixture(monkeypatch):
+    _need_cpp()
+    monkeypatch.setattr(asr, "backend_choice", lambda: ("whispercpp", True))
+    d = asr.transcribe(FIXTURE, prompt=asr.glossary_prompt())
+    assert_ojf_schema(d)
+    text = "".join(s["text"] for s in d["transcription"])
+    assert "ผลจาก" in text and "�" not in text
+    json.dumps(d, ensure_ascii=False).encode("utf-8")                 # clean UTF-8, no lone surrogates
+    ms = pytest.importorskip("engine.subs.make_subs")
+    cues, _ = ms.build_cues(d, ms.load_glossary(None), 22)
+    assert cues and "ผลจาก" in "".join(c["t"] for c in cues)
+
+
+@pytest.mark.slow
+def test_real_whispercpp_per_phrase(monkeypatch, tmp_path):
+    _need_cpp()
+    monkeypatch.setattr(asr, "backend_choice", lambda: ("whispercpp", True))
+    wavs = []
+    for i, (a, b) in enumerate([(17.39, 18.98), (19.56, 21.34)]):      # the two "ผลจากกระทะ…" takes of the fixture
+        w = tmp_path / f"p{i:03d}.wav"
+        kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-ss", str(a), "-t", str(b - a), "-i", FIXTURE, "-vn",
+                 "-ac", "1", "-ar", "16000", "-af", "apad=pad_dur=0.6", w])
+        wavs.append(w)
+    texts = asr.transcribe_many(wavs)
+    assert len(texts) == 2 and all("ผลจาก" in t for t in texts), texts

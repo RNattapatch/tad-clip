@@ -44,10 +44,20 @@ STANDARD_FPS = [Fraction(24000, 1001), Fraction(24), Fraction(25), Fraction(3000
 
 HDR_CHAIN = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable,"
              "zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
-SDR_CHAIN = "scale=in_range=auto:in_color_matrix=auto:out_color_matrix=bt709:out_range=tv,format=yuv420p"
+# ffmpeg 8 ignores -colorspace/-color_trc flags for frames that carry no tags, so the tags are put on the frames
+BT709_TAGS = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+UNTAGGED = {None, "", "unknown", "unspecified", "reserved"}
 
 
 # ---------------------------------------------------------------- phrases (audio energy)
+
+def _read_json(path, hint=""):
+    """UTF-8 JSON, BOM tolerated (Windows Notepad adds one)."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except ValueError as e:
+        raise KitError(f"อ่าน {path} ไม่ได้ — ไม่ใช่ JSON ที่ถูกต้อง ({e}){hint}") from e
+
 
 def _need_file(path, what="ไฟล์"):
     if not Path(path).is_file():
@@ -57,8 +67,10 @@ def _need_file(path, what="ไฟล์"):
 def decode_audio(video):
     """16 kHz mono int16 samples (as float32) of any media file."""
     _need_file(video)
-    res = subprocess.run([kit.tool("ffmpeg"), "-v", "error", "-i", str(video), "-vn", "-ac", "1", "-ar", str(SR),
-                          "-f", "s16le", "-"], capture_output=True)
+    # aresample first_pts=0: pad the start so sample 0 is container time 0, the clock render's trim/atrim use
+    res = subprocess.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-i", str(video), "-vn",
+                          "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
+                         capture_output=True, stdin=subprocess.DEVNULL)
     a = np.frombuffer(res.stdout[: len(res.stdout) // 2 * 2], np.int16).astype(np.float32)
     if res.returncode != 0 or len(a) < HOP:
         tail = "\n".join(res.stderr.decode("utf-8", "replace").strip().splitlines()[-5:])
@@ -111,7 +123,7 @@ def per_phrase_asr(video, ph, prompt=None):
             f = Path(tmp) / f"p{i:03d}.wav"
             files.append(f)
             a = max(0.0, s - 0.05)
-            kit.run([ffmpeg, "-v", "error", "-y", "-ss", f"{a:.3f}", "-t", f"{e + 0.08 - a:.3f}", "-i", video,
+            kit.run([ffmpeg, "-v", "error", "-nostdin", "-y", "-ss", f"{a:.3f}", "-t", f"{e + 0.08 - a:.3f}", "-i", video,
                      "-vn", "-ac", "1", "-ar", "16000", "-af", "apad=pad_dur=0.6", f])
         return dict(enumerate(asr.transcribe_many(files, prompt=prompt)))
 
@@ -135,6 +147,9 @@ def plan(ph, dur, drop, gap):
         lo = ph[first - 1][1] if first > 0 else 0          # never pad into the neighbouring phrase
         hi = ph[last + 1][0] if last + 1 < len(ph) else dur
         out.append([max(lo, s - PRE, 0), min(hi, e + POST, dur)])
+    for k in range(1, len(out)):   # pauses shorter than PRE + POST: share the air, never play it twice
+        if out[k][0] < out[k - 1][1]:
+            out[k - 1][1] = out[k][0] = (out[k][0] + out[k - 1][1]) / 2
     return out
 
 
@@ -142,14 +157,19 @@ def split_phrases(ph, split):
     """{"25": 55.21} cuts phrase 25 at that time into "25a"/"25b". -> (new phrase list, ids as strings)."""
     ph = [list(p) for p in ph]
     ids = [str(i) for i in range(len(ph))]
-    for k, t in sorted((split or {}).items(), key=lambda kv: -int(kv[0])):
-        i = int(k)
-        if not 0 <= i < len(ph) or not ph[i][0] < float(t) < ph[i][1]:
+    jobs = []
+    for k, t in (split or {}).items():
+        try:
+            jobs.append((int(k), str(k), float(t)))
+        except (TypeError, ValueError):
+            raise KitError(f"split \"{k}\": {t} ไม่ถูกต้อง — รูปแบบคือ {{\"เลขวลี\": เวลาเป็นวินาที}} เช่น {{\"25\": 55.21}}") from None
+    for i, k, t in sorted(jobs, reverse=True):
+        if not 0 <= i < len(ph) or not ph[i][0] < t < ph[i][1]:
             where = f"{ph[i][0]:.2f}-{ph[i][1]:.2f}" if 0 <= i < len(ph) else f"มีวลี 0-{len(ph) - 1}"
             raise KitError(f"split วลี {k} ที่ {t} วินาที ไม่ถูกต้อง — เวลาต้องอยู่ในช่วงของวลีนั้น ({where})")
         s0, e0 = ph[i]
-        ph[i:i + 1] = [[s0, float(t)], [float(t), e0]]
-        ids[i:i + 1] = [k + "a", k + "b"]
+        ph[i:i + 1] = [[s0, t], [t, e0]]
+        ids[i:i + 1] = [str(i) + "a", str(i) + "b"]
     return ph, ids
 
 
@@ -181,7 +201,7 @@ def run_phrases(video, out, whisper=False, force=False):
     out = Path(out)
     if out.exists() and not force:
         print(f"ข้าม — มี {out} อยู่แล้ว (ใช้ --force เพื่อสร้างใหม่ เช่นตอนเปลี่ยนมาใช้ --whisper) รายการเดิม:")
-        _print_phrases(json.loads(out.read_text(encoding="utf-8")))
+        _print_phrases(_read_json(out, " ใช้ --force เพื่อสร้างใหม่"))
         return 0
     ph, dur = phrases(video)
     prompt = asr.glossary_prompt()
@@ -192,7 +212,7 @@ def run_phrases(video, out, whisper=False, force=False):
     else:
         cache = out.parent / "asr.json"
         if cache.exists() and not force:
-            data = json.loads(cache.read_text(encoding="utf-8"))
+            data = _read_json(cache, " ใช้ --force เพื่อถอดเสียงใหม่")
         else:
             print(f"ถอดเสียงทั้งคลิป (เก็บไว้ที่ {cache}) …", file=sys.stderr, flush=True)
             data = asr.transcribe(video, prompt=prompt)
@@ -211,7 +231,7 @@ def run_phrases(video, out, whisper=False, force=False):
 
 def probe_video(video):
     res = kit.run([kit.tool("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
-                   "stream=avg_frame_rate,r_frame_rate,color_transfer,pix_fmt,width,height", "-of", "json", video])
+                   "stream=avg_frame_rate,r_frame_rate,color_transfer,color_space,color_primaries,pix_fmt,width,height", "-of", "json", video])
     streams = json.loads(res.stdout).get("streams") or []
     if not streams:
         raise KitError(f"{Path(video).name} ไม่มีภาพวิดีโอ — roughcut ใช้กับไฟล์วิดีโอเท่านั้น")
@@ -238,32 +258,48 @@ def source_fps(info):
 @functools.lru_cache(maxsize=None)
 def _has_filter(ffmpeg, name):
     try:
-        text = kit.run([ffmpeg, "-hide_banner", "-filters"]).stdout
+        text = kit.run([ffmpeg, "-hide_banner", "-nostdin", "-filters"]).stdout
     except KitError:
         return False
     return re.search(rf"^\s*\S+\s+{re.escape(name)}\s", text, re.M) is not None
 
 
-@functools.lru_cache(maxsize=None)
-def _filter_script_option(ffmpeg):
-    """`-/filter_complex <file>` on ffmpeg >= 7, the older `-filter_complex_script` before that."""
-    try:
-        first = kit.run([ffmpeg, "-version"]).stdout.splitlines()[0]
-    except (KitError, IndexError):
-        return "-/filter_complex"
-    m = re.search(r"version n?(\d+)\.", first)
-    return "-filter_complex_script" if m and int(m.group(1)) < 7 else "-/filter_complex"
+_FILTER_OPTION = None   # "-/filter_complex" (ffmpeg 7+) or "-filter_complex_script", learned on first use
+
+
+def run_with_filter_script(before, script, after):
+    """Run ffmpeg with the filtergraph read from a file. Tries `-/filter_complex` and, when this ffmpeg does not know
+    it (older builds), `-filter_complex_script`. No version parsing, so git/nightly builds work too."""
+    global _FILTER_OPTION
+    options = [_FILTER_OPTION] if _FILTER_OPTION else ["-/filter_complex", "-filter_complex_script"]
+    for i, opt in enumerate(options):
+        try:
+            kit.run([*before, opt, script, *after])
+        except KitError as e:
+            if i + 1 < len(options) and ("nrecognized option" in str(e) or "Option not found" in str(e)):
+                continue
+            raise
+        _FILTER_OPTION = opt
+        return
 
 
 def video_filter(info, has_zscale):
-    """The post-concat chain that turns any source into SDR bt709 yuv420p (tone-mapping iPhone HDR)."""
+    """The post-concat chain that turns any source into SDR bt709 yuv420p (tone-mapping iPhone HDR).
+    A source with no colour tags is read as bt709 from 720p up and bt601 below (ffmpeg would assume bt601 for all)."""
     if info.get("color_transfer") in HDR_TRANSFERS:
         if has_zscale:
             return HDR_CHAIN
         print("คำเตือน: ffmpeg ตัวนี้ไม่มีฟิลเตอร์ zscale จึงแปลงคลิป HDR เป็น SDR ด้วยวิธีธรรมดา สีอาจดูจืด "
               "— ติดตั้ง ffmpeg ตัวเต็ม (ที่มี zscale) เพื่อให้สีถูกต้อง", file=sys.stderr)
         return "format=yuv420p"
-    return SDR_CHAIN
+    if info.get("color_space") in UNTAGGED:
+        try:
+            matrix = "bt601" if int(info.get("height")) < 720 else "bt709"
+        except (TypeError, ValueError):
+            matrix = "bt709"
+    else:
+        matrix = "auto"
+    return f"scale=in_range=auto:in_color_matrix={matrix}:out_color_matrix=bt709:out_range=tv,format=yuv420p,{BT709_TAGS}"
 
 
 def build_filter_script(keep, vf):
@@ -282,7 +318,7 @@ def build_filter_script(keep, vf):
 def _remove(path):
     try:
         os.remove(path)
-    except FileNotFoundError:
+    except OSError:   # missing, or briefly locked by an antivirus on Windows -- never fail a finished render for it
         pass
 
 
@@ -293,10 +329,7 @@ def render(video, drops, out, force=False):
         return 0
     _need_file(video)
     _need_file(drops, "ไฟล์ drops.json")
-    try:
-        spec = json.loads(Path(drops).read_text(encoding="utf-8"))
-    except ValueError as e:
-        raise KitError(f"อ่าน {drops} ไม่ได้ — ไม่ใช่ JSON ที่ถูกต้อง ({e})") from e
+    spec = _read_json(drops)
     ph, dur = phrases(video)
     keep = resolve_keep(ph, dur, spec)
     info = probe_video(video)
@@ -308,12 +341,13 @@ def render(video, drops, out, force=False):
     part = out.with_name(out.stem + ".partial" + out.suffix)
     try:
         script.write_bytes(build_filter_script(keep, vf).encode("utf-8"))   # bytes: LF endings on every OS
-        kit.run([ffmpeg, "-v", "error", "-y", "-i", video, _filter_script_option(ffmpeg), script,
-                 "-map", "[v]", "-map", "[a]",
-                 "-c:v", "libx264", "-crf", "15", "-preset", "medium", "-pix_fmt", "yuv420p",
-                 "-r", source_fps(info), "-fps_mode", "cfr",
-                 "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
-                 "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", part])
+        run_with_filter_script(
+            [ffmpeg, "-v", "error", "-nostdin", "-y", "-i", video], script,
+            ["-map", "[v]", "-map", "[a]",
+             "-c:v", "libx264", "-crf", "15", "-preset", "medium", "-pix_fmt", "yuv420p",
+             "-r", source_fps(info), "-fps_mode", "cfr",
+             "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
+             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", part])
         seg = {"source": str(Path(video).resolve()), "drop": [str(d) for d in spec.get("drop") or []],
                "keep": [[round(s, 3), round(e, 3)] for s, e in keep]}
         asr.write_json_atomic(Path(str(out) + ".segments.json"), seg, indent=None)

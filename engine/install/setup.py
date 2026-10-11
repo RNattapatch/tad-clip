@@ -26,7 +26,7 @@ GB = 1024 ** 3
 CHROME_TIMEOUT = 20   # same limit as doctor
 # approximate disk use in MB (installed), for the plan shown before anything is downloaded
 SIZE_MB = {
-    "mac": {"ffmpeg": 1000, "node": 250, "uv": 50, "yt-dlp": 350},
+    "mac": {"ffmpeg": 1000, "node": 250, "uv": 50, "yt-dlp": 350, "whisper-cli": 40},
     "windows": {"ffmpeg": 300, "node": 90, "uv": 45, "yt-dlp": 20},
 }
 VENV_MB = 700        # Python 3.12 + faster-whisper/ctranslate2/onnxruntime + pythainlp + uv cache
@@ -74,6 +74,8 @@ def update_config(tools: dict, model: str, device: str = None) -> None:
 def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict, cuda: bool = None) -> tuple:
     sizes = SIZE_MB[osn]
     names = {"ffmpeg": "ffmpeg (ตัดต่อ + ฝังซับ)", "node": "Node.js 22", "uv": "uv (ตัวติดตั้ง Python)", "yt-dlp": "yt-dlp (โหลดคลิปจากเว็บ)"}
+    if osn == "mac":
+        names["whisper-cli"] = "whisper.cpp (ถอดเสียงด้วยชิปกราฟิกของ Mac)"
     how = "ผ่าน Homebrew" if osn == "mac" else "โหลดไฟล์ลง " + str(kit.home() / "bin")
     lines, total = [], 0
     for k, label in names.items():
@@ -87,11 +89,16 @@ def plan(osn: str, model: str, with_cutout: bool, gpu, have: dict, cuda: bool = 
     else:
         lines.append(f"- Python {PY_VERSION} + faster-whisper + pythainlp ใน {kit.home() / 'venv'} (~{VENV_MB} MB)")
         total += VENV_MB
-    mb = inst.WHISPER_MB.get(model, 3090)
-    if inst.model_dir(model, kit.models_dir()):
-        lines.append(f"- โมเดลถอดเสียง {model}: มีแล้ว ข้าม")
+    if osn == "mac" and inst.asr_backend() == "whispercpp":
+        mb = inst.GGML_BYTES.get(model, 3_100_000_000) / 1e6
+        done, label = inst.ggml_state(model)[0], f"โมเดลถอดเสียง {model} สำหรับ whisper.cpp (ggml-{model}.bin)"
     else:
-        lines.append(f"- โมเดลถอดเสียง {model} (~{mb / 1024:.1f} GB) ลง {kit.models_dir()}")
+        mb = inst.WHISPER_MB.get(model, 3090)
+        done, label = bool(inst.model_dir(model, kit.models_dir())), f"โมเดลถอดเสียง {model}"
+    if done:
+        lines.append(f"- {label}: มีแล้ว ข้าม")
+    else:
+        lines.append(f"- {label} (~{mb / 1000:.1f} GB) ลง {kit.models_dir()}")
         total += mb
     if cuda is None:
         cuda = osn == "windows" and bool(gpu)
@@ -223,6 +230,16 @@ def setup_cuda(uv: str, py: Path, model: str) -> str:
 
 
 def download_model(py: Path, model: str) -> None:
+    if inst.asr_backend() == "whispercpp":   # macOS: whisper.cpp + Metal (faster-whisper stays in the venv as the fallback)
+        if inst.ggml_state(model)[0]:
+            say(f"  ✓ โมเดล ggml-{model}.bin มีอยู่แล้ว")
+            return
+        inst.download_resumable(inst.GGML_URL.format(model=model), inst.ggml_path(model), f"ggml-{model}.bin",
+                                expected=inst.GGML_BYTES.get(model))
+        ok, why = inst.ggml_state(model)
+        if not ok:
+            raise kit.KitError(f"{why} — สั่งติดตั้งใหม่อีกครั้ง (มันจะโหลดต่อจากเดิม)")
+        return
     if inst.model_dir(model, kit.models_dir()):
         say(f"  ✓ โมเดล {model} มีอยู่แล้ว")
         return

@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -101,6 +102,48 @@ def test_vision_off_mac_is_a_thai_error(monkeypatch):
     monkeypatch.setattr(cutout, "IS_MAC", False)
     with pytest.raises(kit.KitError, match="Mac"):
         cutout.vision_bin()
+
+
+def test_swiftc_shim_without_command_line_tools_is_a_thai_error(monkeypatch, tmp_path):
+    """/usr/bin/swiftc exists on every Mac — only `xcrun --find swiftc` says whether the compiler is really there."""
+    monkeypatch.setattr(cutout, "IS_MAC", True)
+    monkeypatch.setattr(cutout.kit, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(cutout.shutil, "which", lambda name: "/usr/bin/" + name)
+
+    def fake_run(cmd, **kw):
+        assert cmd[:3] == ["xcrun", "--find", "swiftc"], cmd
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="xcrun: error: invalid active developer path")
+
+    monkeypatch.setattr(cutout.subprocess, "run", fake_run)
+    with pytest.raises(kit.KitError, match="xcode-select --install"):
+        cutout.vision_bin()
+
+
+@mac_only
+def test_vision_binary_builds_from_scratch_through_xcrun(tmp_path, monkeypatch):
+    monkeypatch.setattr(cutout.kit, "cache_dir", lambda: tmp_path)
+    b = cutout.vision_bin()
+    assert b == tmp_path / "vision-matte" and b.stat().st_size > 10_000 and os.access(b, os.X_OK)
+
+
+@pytest.mark.skipif(kit.IS_WINDOWS, reason="the fake matte tool is a POSIX script")
+def test_chatty_matte_tool_does_not_deadlock(tmp_path, monkeypatch):
+    """vision-matte logs to stderr while ffmpeg reads its stdout — >64 KB of log must not block the pipe."""
+    clip = tmp_path / "คลิป เล็ก.mp4"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=10", "-t", "1",
+             "-pix_fmt", "yuv420p", "-c:v", "libx264", str(clip)])
+    fake = tmp_path / "fake-matte"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write('log ' * 100000)\nsys.stderr.flush()\n"
+                    "sys.stdout.buffer.write(bytes([255]) * (64 * 64 * 10))\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(cutout, "vision_bin", lambda: fake)
+    out = tmp_path / "ผล.webm"
+    err = []
+    t = threading.Thread(target=lambda: err.append(None) if cutout._vision(clip, out, cutout.probe(clip)) is None else None, daemon=True)
+    t.start()
+    t.join(60)
+    assert not t.is_alive(), "deadlock: vision-matte stderr filled its pipe"
+    assert out.exists() and out.stat().st_size > 0
 
 
 def test_tb_device_order(monkeypatch):

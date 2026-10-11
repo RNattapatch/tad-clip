@@ -168,6 +168,25 @@ test('cut-out engine rule: auto = vision on mac · tb on windows only when insta
   assert.equal(thv.machineEngine({ cutout: { engine: 'tb' } }, 'darwin'), 'tb');
 });
 
+test('retry predicate: hangs, closed pipes/targets and crashes retry · real errors do not', () => {
+  for (const m of ['CDP Page.captureScreenshot ค้างเกิน 60 วิ — Chrome ค้าง', 'CDP pipe closed — Chrome/Edge ปิดตัวเอง (exit null)',
+    'Inspected target navigated or closed', 'Target crashed', 'Session with given id not found.']) assert.ok(thv.isRetryable(new Error(m)), m);
+  for (const m of ['ffmpeg exit 1', 'render หน้าว่าง (job frame shot 01)', 'ไม่เจอคลิป: /x.mp4']) assert.ok(!thv.isRetryable(new Error(m)), m);
+});
+
+test('a browser killed while a shot is loading is reopened and the shot is redone (↻), not a crash', () => {
+  const dir = workDir();
+  const f = writePlan(dir, { title: 't', proof_exempt: 'x', fps: 30, shots: [
+    { id: '01', t: [0, 1], layout: 'full-card', visual: { card: { type: 'title', lines: ['ช็อตแรก'] } } },
+    { id: '02', t: [1, 2], layout: 'full-card', visual: { card: { type: 'title', lines: ['ช็อตสอง'] } } }] });
+  const r = node(['motion', f], { THV_TEST_KILL_BROWSER: '02' });   // test hook: SIGKILL the browser right after Page.navigate for shot 02
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /↻ shot 02/);
+  assert.match(r.stdout, /✓ shots\/02-full-card\.mp4/);
+  const v = ffprobeJson(join(dir, 'out', 'shots', '02-full-card.mp4')).streams[0];
+  assert.equal(+v.nb_frames, 30);
+});
+
 // Node 22's built-in WebSocket refuses CDP messages over 4 MiB (permessage-deflate cap) → big PNG frames used to look like a
 // "hung Chrome". The pipe transport has no cap: a full-frame noise photo (PNG ≫ 4 MB) must capture fine.
 test('frames bigger than 4 MB capture (CDP over a pipe, not a WebSocket)', () => {
@@ -192,12 +211,43 @@ test('Edge / full Chrome get --headless=new, chrome-headless-shell gets --headle
   assert.ok(shell.includes('--remote-debugging-pipe') && !shell.some(a => a.startsWith('--remote-debugging-port')));
 });
 
+// ---------------------------------------------------------------- the skill users run
+test('SKILL.md: clean code fences · every bash block sources env.sh · no bare tools · no dev-only knobs', () => {
+  const md = readFileSync(join(ROOT, 'skills', 'tad-clip-visual', 'SKILL.md'), 'utf8').split('\n');
+  const HEAD = 'K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"';
+  let open = null, blocks = 0;
+  md.forEach((l, i) => {
+    const t = l.trim();
+    if (!t.startsWith('```')) { if (open?.bash) { open.lines.push(t); } return; }
+    assert.ok(t === '```' || t === '```bash', `line ${i + 1}: fence with trailing text: ${t.slice(0, 40)}`);
+    if (open) {
+      if (open.bash) {
+        blocks++;
+        assert.equal(open.lines[0], HEAD, `bash block at line ${open.at}: first line must source env.sh`);
+        for (const c of open.lines) assert.doesNotMatch(c, /^(node|ffmpeg|ffprobe|python3?|yt-dlp)\s/, `bash block at line ${open.at}: bare tool "${c.slice(0, 30)}"`);
+      }
+      open = null;
+    } else open = { at: i + 1, bash: t === '```bash', lines: [] };
+  });
+  assert.equal(open, null, 'unclosed code fence');
+  assert.ok(blocks >= 8, `only ${blocks} bash blocks`);
+  const text = md.join('\n');
+  assert.doesNotMatch(text, /TAD_CLIP_TB_PYTHON/, 'dev-only env var in user-facing text');
+  assert.doesNotMatch(text, /ytsearch\d+:/, 'raw yt-dlp search — use python -m engine.fetch ytsearch');
+});
+
 // ---------------------------------------------------------------- real render against the fixture
 const ffprobeJson = f => JSON.parse(spawnSync(kit.tool('ffprobe'), ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', f], { encoding: 'utf8' }).stdout);
 function yavg(file, at, crop) {
   const vf = `${crop ? `crop=${crop},` : ''}signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG:file=-`;
   const r = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', vf, '-f', 'null', '-'], { encoding: 'utf8' });
   const m = r.stdout.match(/YAVG=([\d.]+)/); assert.ok(m, r.stderr); return +m[1];
+}
+const PILL_WHITE = [520, 1132, 40, 12];   // inside the white hook-pill of shot 02 (y 62%), top padding above the text
+function rgbMean(file, at, [x, y, w, h], pre = '') {   // mean R,G,B of a patch, decoded with the file's own range/matrix
+  const r = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', ...(at ? ['-ss', String(at)] : []), '-i', file, '-frames:v', '1', '-vf', `${pre}crop=${w}:${h}:${x}:${y},format=rgb24`, '-f', 'rawvideo', '-'], { maxBuffer: 1 << 26 });
+  const m = [0, 0, 0]; for (let i = 0; i < r.stdout.length; i++) m[i % 3] += r.stdout[i];
+  assert.ok(r.stdout.length, String(r.stderr)); return m.map(v => v / (r.stdout.length / 3));
 }
 function grayBand(file, at) {   // raw luma of the subtitle band (y 1240–1460 of 1920)
   const r = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', 'crop=1080:220:0:1240', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'], { maxBuffer: 1 << 26 });
@@ -216,7 +266,7 @@ test('2-shot plan (full-card + overlay) renders onto the fixture: 1080x1920, no 
     '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
     'Dialogue: 0,0:00:00.20,0:00:03.80,Default,,0,0,0,,{\\k40}ทดสอบ{\\k60}ซับ{\\k80}ภาษาไทย', ''].join('\n'));
   const plan = writePlan(dir, {
-    title: 'ทดสอบ 2 ช็อต', source_video: relative(dir, FIXTURE), subs: 'ซับ คลิป/คลิป ทดสอบ.karaoke.ass', proof_exempt: 'test',
+    title: 'ทดสอบ 2 ช็อต', source_video: relative(dir, FIXTURE), subs: 'ซับ คลิป/ไม่มีไฟล์นี้.ass', proof_exempt: 'test',
     shots: [
       { id: '01', t: [0, 2], layout: 'full-card', say: 'การ์ด', visual: { card: { type: 'title', lines: ['ทดสอบ', 'การ์ด*เต็มจอ*'], accent: 1 } } },
       { id: '02', t: [2, 4], layout: 'full-speaker', say: 'ป้าย', overlays: [{ type: 'hook-pill', text: 'ผู้พูด + *ป้าย*', y: 62 }] }] });
@@ -237,7 +287,17 @@ test('2-shot plan (full-card + overlay) renders onto the fixture: 1080x1920, no 
   assert.ok(Math.abs(+info.format.duration - 4) < 0.15, info.format.duration);
   for (const at of [1, 3]) assert.ok(yavg(out, at) > 16, `black frame at ${at}s`);
 
-  const subs = node(['subs', plan]);
+  // colour: the fixture is FULL range — the speaker must keep its colours and the graphics must stay pure (no grey shift)
+  const spk = [100, 300, 40, 40], pill = PILL_WHITE;
+  const src = rgbMean(FIXTURE, 3, spk, 'scale=1080:1920,'), got = rgbMean(out, 3, spk);
+  assert.ok(src.every((c, i) => Math.abs(c - got[i]) < 6), `speaker colour shifted: source ${src.map(Math.round)} → composite ${got.map(Math.round)}`);
+  const card = rgbMean(join(dir, 'out', 'shots', '02-full-speaker.png'), 0, pill);
+  assert.ok(card.every(c => c > 250), `pill patch is not white on the card PNG (${card.map(Math.round)}) — test geometry`);
+  const pillOut = rgbMean(out, 3, pill);
+  assert.ok(pillOut.every(c => c > 245), `white graphic turned grey: ${pillOut.map(Math.round)}`);
+
+  // --ass beats plan.subs and a relative --ass is relative to the plan folder (env.sh has cd'd into the kit)
+  const subs = node(['subs', plan, '--ass', 'ซับ คลิป/คลิป ทดสอบ.karaoke.ass']);
   assert.equal(subs.status, 0, subs.stdout + subs.stderr);
   const burned = join(dir, 'out', 'preview-composite-subs.mp4');
   assert.ok(existsSync(burned) && existsSync(join(dir, 'out', 'preview-composite-720p.mp4')));

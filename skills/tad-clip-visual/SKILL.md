@@ -104,7 +104,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
     "$PY" -m engine.cutout "$W/roughcut.mp4" "$W/out/speaker-cutout.mov"          # engine ตาม config · ระบุเองได้: vision | tb
     ```
   - ห้ามใช้โหมด fast ของ transparent-background (คุณภาพตกชัด)
-  - มี transparent-background อยู่ใน venv อื่นแล้ว (ไม่อยากลงซ้ำ 2GB) → ตั้ง env `TAD_CLIP_TB_PYTHON=<python ของ venv นั้น>` ก่อนรัน · ไม่ตั้ง = ใช้ python ของ kit (`setup --with-cutout`) · ครั้งแรกโหลดโมเดลจากเน็ตเอง
+  - tb ต้องติดตั้งเพิ่มก่อน (skill tad-clip-setup → `--with-cutout` ~2GB) · ใช้ครั้งแรกจะโหลดโมเดลจากเน็ตเอง
 - **2K60** (`preset: "2k60"`): Chrome วาดการ์ดที่ 2K จริง ยกเว้นการ์ดเต็มจอที่วาด 1080 แล้วขยายแบบ lanczos (`card_scale` 1 — เกรนกระดาษของ vox ที่ 2K หนักมาก) · ไม่ต้องรัน `all` ใหม่ด้วย 2K (storyboard/การ์ด PNG วาดที่ 1080 เสมอ) · ใช้เวลา motion ~1 นาที/ช็อต · ไฟล์ 50–100MB ต่อคลิป 1 นาที
 - เช็คที่ว่างก่อนเรนเดอร์ยาว (`df -h "$W"`) — เหลือ <3GB บอกผู้ใช้ก่อน · งานยาวรันเบื้องหลังแล้วรอด้วยการดูบรรทัดสุดท้ายของ log (`→ <โฟลเดอร์>`) ไม่ใช่ `pgrep` (จับ shell ที่รอเองด้วย)
 - เรนเดอร์ใหม่ทีละช็อต: `--shot 07` · Chrome/Edge ค้างระหว่างวาด → เปิดใหม่แล้วทำช็อตนั้นซ้ำเอง สูงสุด 3 ครั้ง (log `↻ shot xx`) · รอบ retry ที่ 2K ถอยไปวาดที่ 1080 แล้วขยาย
@@ -160,17 +160,19 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
 W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
 "$FF" -v error -y -i "$W/roughcut.mp4" -i "<path เต็มของ final ที่ผู้ใช้แต่ง>" -map 0:v -map 1:a -c copy "$W/src-mix.mp4"
-``` · ช่วงที่เขาแต่งภาพเอง → ช็อต `full-speaker` เปล่า · ช่วงเปิดที่เขาใส่ hook text เองแล้ว → ตัดบรรทัดซับที่ซ้ำ
+```
+ช่วงที่เขาแต่งภาพเอง → ช็อต `full-speaker` เปล่า · ช่วงเปิดที่เขาใส่ hook text เองแล้ว → ตัดบรรทัดซับที่ซ้ำ
 
 ## สูตร "ของจริง + มีม" (คลิปเล่าเรื่องคน/แบรนด์จริง)
 
 **1. ไล่หาของจริงตามขั้น** (ทุกชิ้นลง `CREDITS.md`)
 - หน้าประวัติบริษัททางการ → ภาพ + คำบรรยาย ใช้เป็น `proof_file` + `treat: print` · **โหลดภาพขนาดเต็มจากหน้าต้นทาง** (ภาพย่อ 600px แตกบนจอ)
-- โฆษณาจริงของประเทศต้นทาง + ไทย (ค้นก่อน เสนอผู้ใช้ แล้วค่อยโหลดด้วย `"$PY" -m engine.fetch video …`):
+- โฆษณาจริงของประเทศต้นทาง + ไทย — ค้นก่อน (ยังไม่โหลดอะไร) → เสนอรายการให้ผู้ใช้เลือก → โหลดเฉพาะที่ผ่าน (ภาพไม่เกิน 1080p · ตัดช่วงให้):
   ```bash
   K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
-  YT="$("$PY" -c "from engine import kit; print(kit.tool('yt-dlp'))")"
-  "$YT" --flat-playlist --print "%(id)s | %(duration_string)s | %(channel)s | %(title)s" "ytsearch8:<คำค้น>"
+  W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
+  "$PY" -m engine.fetch ytsearch "<คำค้น>" --limit 8                                   # JSON: id · ความยาว · ช่อง · url · ชื่อ
+  "$PY" -m engine.fetch video "<url ที่ผู้ใช้เลือก>" --out "$W/assets/footage" --start 12 --end 18 --no-audio
   ```
   · คำค้นภาษาต้นทางได้ผลดี (ญี่ปุ่น: `<สินค้า> CM 1971` · `<บริษัท> 公式`) · ไทยค้นทั้งชื่อไทยและ `<brand> Thailand TVC` · เลือกช่องทางการก่อน
 - ฟุตเทจยุค: `<เมือง> <ปี> footage` · **ทิ้งคลิปที่มีลายน้ำ/เลขเวลาฝัง**

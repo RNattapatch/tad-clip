@@ -4,6 +4,7 @@ Run: TAD_CLIP_HOME=~/.tad-clip-dev ~/.tad-clip-dev/venv/bin/python -m pytest tes
 Needs ffmpeg + ffprobe (kit.tool). No Whisper model: ASR calls are replaced by fakes.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -133,6 +134,21 @@ def test_plan_keeps_phrases_apart_when_gap_is_smaller():
     assert out[0][1] <= PH[1][0] and out[1][0] >= PH[0][1]
 
 
+@pytest.mark.parametrize("gap", [0.0, 0.05, 0.15, 0.3])
+def test_plan_pieces_never_overlap_even_when_gap_is_below_pre_plus_post(gap):
+    ph = [[0.5, 1.0], [1.1, 1.6], [1.75, 2.2], [2.3, 2.9]]       # pauses of 0.10-0.15 s, less than PRE + POST (0.24 s)
+    out = roughcut.plan(ph, 4.0, set(), gap)
+    for a, b in zip(out, out[1:]):
+        assert b[0] >= a[1] - 1e-9, (a, b)             # no audio is played twice
+    for s, e in out:
+        assert s < e
+
+
+def test_plan_overlap_is_split_in_the_middle_of_the_shared_air():
+    out = roughcut.plan(PH, 4.0, set(), 0.05)
+    assert out[0][1] == out[1][0] == pytest.approx(1.05)    # 1.0 (end of phrase 0) .. 1.1 (start of phrase 1)
+
+
 def test_plan_does_not_pad_into_a_dropped_neighbour():
     out = roughcut.plan(PH, 4.0, {1}, 0.3)
     assert len(out) == 2
@@ -156,6 +172,18 @@ def test_split_outside_the_phrase_is_a_thai_error():
     with pytest.raises(kit.KitError) as e:
         roughcut.split_phrases([[0, 1], [1.5, 3.0]], {"1": 5.0})
     assert "1" in str(e.value) and "split" in str(e.value)
+
+
+@pytest.mark.parametrize("key", ["abc", "1.5", "", "-1", "9"])
+def test_split_with_a_bad_phrase_number_is_a_thai_error(key):
+    with pytest.raises(kit.KitError) as e:
+        roughcut.split_phrases([[0, 1], [1.5, 3.0]], {key: 2.0})
+    assert "split" in str(e.value) and "Traceback" not in str(e.value)
+
+
+def test_split_with_a_non_numeric_time_is_a_thai_error():
+    with pytest.raises(kit.KitError):
+        roughcut.split_phrases([[0, 1], [1.5, 3.0]], {"1": "สอง"})
 
 
 def test_resolve_keep_drops_the_b_half_of_a_split():
@@ -278,9 +306,36 @@ def test_source_fps(info, expected):
     assert roughcut.source_fps(info) == expected
 
 
-def test_video_filter_sdr_converts_matrix_and_range():
-    vf = roughcut.video_filter({"color_transfer": "bt709"}, has_zscale=True)
-    assert vf.endswith("format=yuv420p") and "out_range=tv" in vf and "zscale" not in vf
+TAGS = "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv"
+
+
+def test_video_filter_sdr_converts_matrix_and_range_and_tags_the_result():
+    vf = roughcut.video_filter({"color_transfer": "bt709", "color_space": "bt709", "height": 1280}, has_zscale=True)
+    assert "in_color_matrix=auto" in vf and "out_color_matrix=bt709" in vf and "out_range=tv" in vf
+    assert "zscale" not in vf and vf.endswith("format=yuv420p," + TAGS)
+
+
+@pytest.mark.parametrize("info,matrix", [
+    ({"height": 1080}, "bt709"),                              # untagged HD
+    ({"height": 1920, "color_space": "unknown"}, "bt709"),
+    ({"height": 720}, "bt709"),
+    ({"height": 576}, "bt601"),                               # untagged SD
+    ({"height": 480, "color_space": "unknown"}, "bt601"),
+    ({"height": 1080, "color_space": "bt709"}, "auto"),       # tagged -> trust the tag
+    ({"height": 576, "color_space": "smpte170m"}, "auto"),
+    ({"color_space": "bt2020nc", "height": 2160}, "auto"),
+    ({}, "bt709"),
+])
+def test_video_filter_input_matrix_when_the_source_is_untagged(info, matrix):
+    vf = roughcut.video_filter({"color_transfer": "bt709", **info}, has_zscale=True)
+    assert f"in_color_matrix={matrix}" in vf
+
+
+def test_probe_reports_the_colour_tags_and_size():
+    info = roughcut.probe_video(str(FIXTURE))
+    assert (info["color_space"], info["color_transfer"], info["color_primaries"]) == ("bt709",) * 3
+    assert (info["width"], info["height"]) == (720, 1280)
+    assert roughcut.probe_video(str(FIXTURE))["height"] == 1280
 
 
 @pytest.mark.parametrize("trc", ["smpte2084", "arib-std-b67"])
@@ -294,6 +349,39 @@ def test_video_filter_hdr_without_zscale_falls_back_with_a_warning(capsys):
     vf = roughcut.video_filter({"color_transfer": "smpte2084"}, has_zscale=False)
     assert vf == "format=yuv420p"
     assert "zscale" in capsys.readouterr().err
+
+
+def _rgb_frame(path, matrix):
+    res = subprocess.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-i", str(path), "-frames:v", "1", "-vf",
+                          f"scale=in_color_matrix={matrix}:in_range=tv,format=rgb24", "-f", "rawvideo", "-"],
+                         capture_output=True, check=True)
+    return np.frombuffer(res.stdout, np.uint8).astype(np.float32)
+
+
+def test_untagged_hd_source_keeps_its_colours_and_gets_bt709_tags(tmp_path):
+    src = make_clip(tmp_path / "untagged.mp4", BURSTS, TOTAL, vsrc="smptebars=s=1280x720:r=30",
+                    vargs=("-vf", "format=rgb24,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", "-pix_fmt", "yuv420p",
+                           "-x264-params", "colorprim=undef:transfer=undef:colormatrix=undef"))
+    sv, _ = probe(src)
+    assert sv.get("color_space", "unknown") == "unknown"            # precondition: nothing tells ffmpeg the matrix
+    drops, out = _drops(tmp_path / "drops.json"), tmp_path / "out.mp4"
+    assert roughcut.main(["render", str(src), str(drops), str(out)]) == 0
+    v, _ = probe(out)
+    assert (v["color_space"], v["color_transfer"], v["color_primaries"], v["color_range"]) == ("bt709", "bt709", "bt709", "tv")
+    err = np.abs(_rgb_frame(src, "bt709") - _rgb_frame(out, "bt709")).mean()
+    assert err < 2.0, f"colours shifted: mean error {err:.1f} levels"
+
+
+def test_untagged_sd_source_is_read_as_bt601_and_comes_out_bt709(tmp_path):
+    src = make_clip(tmp_path / "sd.mp4", BURSTS, TOTAL, vsrc="smptebars=s=704x576:r=25",
+                    vargs=("-vf", "format=rgb24,scale=out_color_matrix=bt601:out_range=tv,format=yuv420p", "-pix_fmt", "yuv420p",
+                           "-x264-params", "colorprim=undef:transfer=undef:colormatrix=undef"))
+    assert probe(src)[0].get("color_space", "unknown") == "unknown"
+    drops, out = _drops(tmp_path / "drops.json"), tmp_path / "out.mp4"
+    assert roughcut.main(["render", str(src), str(drops), str(out)]) == 0
+    assert probe(out)[0]["color_space"] == "bt709"
+    err = np.abs(_rgb_frame(src, "bt601") - _rgb_frame(out, "bt709")).mean()
+    assert err < 2.0, f"colours shifted: mean error {err:.1f} levels"
 
 
 def test_render_hdr_hevc_source_comes_out_sdr(tmp_path):
@@ -329,6 +417,123 @@ def test_render_bakes_in_iphone_style_rotation_metadata(tmp_path):
     assert roughcut.main(["render", str(rot), str(drops), str(out)]) == 0
     v, _ = probe(out)
     assert (v["width"], v["height"]) == (240, 320) and "side_data_list" not in v
+
+
+# ---------------------------------------------------------------- robustness (fix round 1)
+
+def _spy_commands(monkeypatch):
+    seen, real_run, real_sub = [], kit.run, subprocess.run
+
+    def run(cmd, **kw):
+        seen.append([str(c) for c in cmd])
+        return real_run(cmd, **kw)
+
+    def sub(cmd, *a, **kw):
+        seen.append([str(c) for c in cmd])
+        return real_sub(cmd, *a, **kw)
+
+    monkeypatch.setattr(kit, "run", run)
+    monkeypatch.setattr(subprocess, "run", sub)
+    return seen
+
+
+def test_every_ffmpeg_call_has_nostdin(synth, tmp_path, monkeypatch):
+    seen = _spy_commands(monkeypatch)
+    FakeASR(monkeypatch)
+    roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "a" / "p.json"), "--whisper"])
+    roughcut.main(["render", str(synth), str(_drops(tmp_path / "d.json")), str(tmp_path / "o.mp4")])
+    ff = [c for c in seen if Path(c[0]).stem == "ffmpeg"]
+    assert len(ff) >= 2 + 4 + 1                              # decode (x2), 4 phrase wavs, render
+    assert all("-nostdin" in c for c in ff), [c for c in ff if "-nostdin" not in c]
+
+
+def test_render_retries_with_the_old_filter_script_option(synth, tmp_path, monkeypatch):
+    tried, real = [], kit.run
+
+    def run(cmd, **kw):
+        cmd = [str(c) for c in cmd]
+        if "-/filter_complex" in cmd:
+            tried.append("-/filter_complex")
+            raise kit.KitError("คำสั่ง ffmpeg ล้มเหลว (exit 1)\nUnrecognized option '/filter_complex'.\nError splitting the argument list: Option not found")
+        if "-filter_complex_script" in cmd:
+            tried.append("-filter_complex_script")
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(kit, "run", run)
+    monkeypatch.setattr(roughcut, "_FILTER_OPTION", None)
+    out = tmp_path / "o.mp4"
+    assert roughcut.main(["render", str(synth), str(_drops(tmp_path / "d.json")), str(out)]) == 0
+    assert tried == ["-/filter_complex", "-filter_complex_script"] and out.exists()
+    # the working spelling is remembered for the next render in this process
+    tried.clear()
+    assert roughcut.main(["render", str(synth), str(_drops(tmp_path / "d2.json")), str(tmp_path / "o2.mp4")]) == 0
+    assert tried == ["-filter_complex_script"]
+
+
+def test_other_ffmpeg_failures_are_not_retried(synth, tmp_path, monkeypatch, capsys):
+    calls = []
+    real = kit.run
+
+    def run(cmd, **kw):
+        if "-/filter_complex" in [str(c) for c in cmd]:
+            calls.append(1)
+            raise kit.KitError("คำสั่ง ffmpeg ล้มเหลว (exit 1)\nError initializing filter 'trim'")
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(kit, "run", run)
+    monkeypatch.setattr(roughcut, "_FILTER_OPTION", None)
+    assert roughcut.main(["render", str(synth), str(_drops(tmp_path / "d.json")), str(tmp_path / "o.mp4")]) == 1
+    assert calls == [1] and "trim" in capsys.readouterr().err
+    assert not list(tmp_path.glob("*.partial*")) and not list(tmp_path.glob("*.filter"))
+
+
+def test_json_files_saved_with_a_bom_are_read(synth, tmp_path, monkeypatch):
+    # Windows Notepad writes UTF-8 with a BOM
+    drops = tmp_path / "drops.json"
+    drops.write_bytes(b"\xef\xbb\xbf" + json.dumps({"drop": [1], "gap": 0.3}).encode())
+    out = tmp_path / "o.mp4"
+    assert roughcut.main(["render", str(synth), str(drops), str(out)]) == 0
+    assert json.loads(Path(str(out) + ".segments.json").read_text(encoding="utf-8"))["drop"] == ["1"]
+    fake = FakeASR(monkeypatch)
+    cache = tmp_path / "w" / "asr.json"
+    cache.parent.mkdir()
+    cache.write_bytes(b"\xef\xbb\xbf" + json.dumps(fake.transcribe("x")).encode())
+    fake.whole_calls.clear()
+    assert roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "w" / "p.json")]) == 0
+    assert fake.whole_calls == [] and json.loads((tmp_path / "w" / "p.json").read_text(encoding="utf-8"))[0]["text"] == "ก"
+    phr = tmp_path / "w" / "p.json"
+    phr.write_bytes(b"\xef\xbb\xbf" + phr.read_bytes())
+    assert roughcut.main(["phrases", str(synth), "--out", str(phr)]) == 0         # the skip path reads it too
+
+
+def test_remove_survives_a_locked_file(tmp_path, monkeypatch):
+    f = tmp_path / "x.filter"
+    f.write_text("x")
+
+    def locked(path):
+        raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+
+    monkeypatch.setattr(os, "remove", locked)
+    roughcut._remove(f)                                       # an antivirus holding the file must not fail a finished render
+    roughcut._remove(tmp_path / "never-existed")
+
+
+def test_phrase_times_follow_the_container_clock_when_audio_starts_late(tmp_path):
+    wav = tmp_path / "src.wav"
+    write_wav(wav, BURSTS, TOTAL)
+    late = tmp_path / "late.mp4"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i", f"color=c=black:s=320x240:r=30:d={TOTAL + 1}",
+             "-itsoffset", "0.3", "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", late])
+    res = kit.run([kit.tool("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=start_time", "-of", "csv=p=0", late])
+    assert float(res.stdout.strip()) > 0.15, "fixture is not really late-starting"   # 0.3 s minus AAC priming
+    ph, dur = roughcut.phrases(str(late))
+    for (s, e), (es, ee) in zip(ph, BURSTS):
+        assert s == pytest.approx(es + 0.3, abs=0.06) and e == pytest.approx(ee + 0.3, abs=0.06)
+    # and a render cuts where the phrases are: with phrase 0 dropped nothing of it may remain
+    drops, out = _drops(tmp_path / "d.json", drop=[0]), tmp_path / "o.mp4"
+    assert roughcut.main(["render", str(late), str(drops), str(out)]) == 0
+    seg = json.loads(Path(str(out) + ".segments.json").read_text(encoding="utf-8"))
+    assert seg["keep"][0][0] >= ph[0][1] - 1e-6
 
 
 # ---------------------------------------------------------------- phrases CLI
@@ -413,8 +618,10 @@ def test_phrases_cli_passes_the_glossary_prompt_hint(synth, tmp_path, monkeypatc
     kit.save_config({"tools": cfg["tools"], "glossary": {"prompt_hint": "ชื่อแบรนด์ Black Pan"}})
     roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "p1.json"), "--whisper"])
     roughcut.main(["phrases", str(synth), "--out", str(tmp_path / "p2.json")])
-    assert fake.many_calls == ["ชื่อแบรนด์ Black Pan"]
-    assert fake.whole_calls[0][1] == "ชื่อแบรนด์ Black Pan"
+    base = json.loads((ROOT / "engine" / "subs" / "glossary-base.json").read_text(encoding="utf-8"))["prompt_hint"]
+    expected = base + ", ชื่อแบรนด์ Black Pan"
+    assert fake.many_calls == [expected]
+    assert fake.whole_calls[0][1] == expected
 
 
 def test_cli_errors_are_thai_messages_not_tracebacks(tmp_path, capsys):

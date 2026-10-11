@@ -1,4 +1,4 @@
-"""macOS: Homebrew installs ffmpeg-full (keg-only, has libass), node, uv, yt-dlp — anything already present is kept."""
+"""macOS: Homebrew installs ffmpeg-full (keg-only, has libass), node, uv, yt-dlp, whisper-cpp (Metal ASR) — anything already present is kept."""
 from __future__ import annotations
 
 import subprocess
@@ -8,7 +8,7 @@ from engine import kit
 from engine import install as inst
 
 BREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-FORMULA = {"ffmpeg": "ffmpeg-full", "node": "node", "uv": "uv", "yt-dlp": "yt-dlp"}
+FORMULA = {"ffmpeg": "ffmpeg-full", "node": "node", "uv": "uv", "yt-dlp": "yt-dlp", "whisper-cli": "whisper-cpp"}
 
 
 def brew() -> str | None:
@@ -42,11 +42,12 @@ def find(prefix: Path) -> dict:
     out["node"] = node
     out["uv"] = inst.which("uv", dirs)
     out["yt-dlp"] = inst.which("yt-dlp", dirs)
+    out["whisper-cli"] = inst.which("whisper-cli", dirs)
     return out
 
 
 def missing(found: dict) -> list:
-    return [FORMULA[k] for k in ("ffmpeg", "node", "uv", "yt-dlp") if not found.get(k)]
+    return [FORMULA[k] for k in FORMULA if not found.get(k)]
 
 
 def brew_install(b: str, formulas: list) -> int:
