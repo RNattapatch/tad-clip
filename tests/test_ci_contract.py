@@ -82,7 +82,7 @@ def test_pull_requests_run_only_from_forks():
 
 
 def test_model_cache_key_names_the_model_per_backend():
-    assert "faster-whisper-base" in CI and "ggml-base" in CI
+    assert "faster-whisper-medium" in CI and "ggml-base" in CI   # Windows smoke needs medium for Thai
 
 
 # ---------------------------------------------------------------- skill preamble on Windows (final fix wave)

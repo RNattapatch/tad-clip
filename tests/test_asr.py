@@ -448,6 +448,7 @@ def test_transcribe_many_loads_once_and_uses_clean_per_clip_settings(tmp_path, m
 
 
 def test_transcribe_many_accepts_a_prompt_and_str_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("TAD_CLIP_MODEL", "large-v3")   # only large-v3 is given the hint on faster-whisper (fw_prompt)
     m = FakeModel(texts=["x"])
     monkeypatch.setattr(asr, "load_model", lambda *a, **k: m)
     asr.transcribe_many([str(make_wav(tmp_path / "ก.wav"))], prompt="คำใบ้")

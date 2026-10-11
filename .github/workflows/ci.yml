@@ -67,7 +67,7 @@ jobs:
             rev=$(grep -oE 'GGML_REV = "[0-9a-f]{40}"' engine/install/__init__.py | grep -oE '[0-9a-f]{40}')
             echo "models=models-macOS-ggml-base-${rev:0:12}" >> "$GITHUB_OUTPUT"
           else
-            echo "models=models-$RUNNER_OS-faster-whisper-base-v1" >> "$GITHUB_OUTPUT"
+            echo "models=models-$RUNNER_OS-faster-whisper-medium-v2" >> "$GITHUB_OUTPUT"
           fi
 
       # setup.py keeps uv's cache in <home>/cache/uv by itself; CI only restores/saves that folder
@@ -102,7 +102,7 @@ jobs:
           # identical to the bootstrap lines in skills/tad-clip-setup/SKILL.md
           powershell -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = 0; [Net.ServicePointManager]::SecurityProtocol = 3072; $h = $env:TAD_CLIP_HOME; if (-not $h) { $h = Join-Path $env:USERPROFILE .tad-clip }; $b = Join-Path $h bin; New-Item -ItemType Directory -Force -Path $b | Out-Null; $z = Join-Path $b uv.zip; Invoke-WebRequest -UseBasicParsing -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath $b; Remove-Item $z'
           TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
-          UV_PYTHON_INSTALL_DIR="$TC_HOME/python" UV_PYTHON_BIN_DIR="$TC_HOME/python/bin" UV_CACHE_DIR="$TC_HOME/cache/uv" UV_PYTHON_INSTALL_REGISTRY=0 "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 engine/install/setup.py --yes --model base
+          UV_PYTHON_INSTALL_DIR="$TC_HOME/python" UV_PYTHON_BIN_DIR="$TC_HOME/python/bin" UV_CACHE_DIR="$TC_HOME/cache/uv" UV_PYTHON_INSTALL_REGISTRY=0 "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 engine/install/setup.py --yes --model medium
 
       - name: Nothing new outside the kit home
         run: |
@@ -188,6 +188,9 @@ jobs:
       - name: Smoke (fixture → final.mp4)
         if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
         timeout-minutes: 20
+        env:
+          # faster-whisper base hears no Thai on the fixture (one stalled word on Windows); medium — the kit's low-RAM option — does
+          TAD_CLIP_MODEL: ${{ runner.os == 'Windows' && 'medium' || 'base' }}
         run: '"$PY" tests/smoke/smoke.py --artifacts "$ARTIFACTS"'
 
       - name: Save whisper model (only when everything passed)
