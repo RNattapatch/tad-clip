@@ -193,8 +193,11 @@ def _alpha_range(out: Path, at: float):
 
 
 def _run_cli(*args, env=None):
-    return subprocess.run([sys.executable, "-m", "engine.cutout", *map(str, args)], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", env={**os.environ, **(env or {})})
+    r = subprocess.run([sys.executable, "-m", "engine.cutout", *map(str, args)], cwd=ROOT, capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, **(env or {})})
+    if "Could not create inference context" in (r.stderr or ""):
+        pytest.skip("Apple Vision has no GPU/Neural Engine on this machine (CI virtual machine)")
+    return r
 
 
 @mac_only
