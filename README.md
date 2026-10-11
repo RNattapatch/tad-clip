@@ -26,6 +26,8 @@
 
 ## เตรียมเครื่อง
 
+ยังไม่เคยติดตั้ง Claude Code? โหลด[คู่มือติดตั้ง Claude Code แบบ PDF](https://punnattapatch.com/free/tad-clip/claude-code-setup-guide.pdf) ทีละขั้นทั้ง Windows และ Mac แล้วค่อยกลับมาทำต่อ
+
 | ต้องมี | รายละเอียด |
 |---|---|
 | Claude | แพ็กเกจ Pro ขึ้นไป ใช้แท็บ Code ในแอป Claude บนคอม และตั้ง Environment เป็น Local |
