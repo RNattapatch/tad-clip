@@ -81,7 +81,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Windows ]; then set -- "$APPDATA/uv/python" "$APPDATA/uv/data/python" "$LOCALAPPDATA/uv/cache"
           else set -- "$HOME/.local/share/uv/python" "$HOME/.cache/uv"; fi
-          for d in "$@"; do ls -A "$d" 2>/dev/null | sed "s|^|$d/|"; done > "$RUNNER_TEMP/uv-default-before.txt"
+          for d in "$@"; do if [ -d "$d" ]; then for f in "$d"/* "$d"/.[!.]*; do if [ -e "$f" ]; then echo "$f"; fi; done; fi; done > "$RUNNER_TEMP/uv-default-before.txt"
           printf '%s\n' "$@" > "$RUNNER_TEMP/uv-default-dirs.txt"
 
       - name: Install (macOS — system python3, Homebrew)
@@ -99,7 +99,7 @@ jobs:
       - name: Nothing new outside the kit home
         run: |
           # setup must not add a Python or a cache in uv's default places: deleting the kit home has to free everything
-          while IFS= read -r d; do ls -A "$d" 2>/dev/null | sed "s|^|$d/|"; done < "$RUNNER_TEMP/uv-default-dirs.txt" > "$RUNNER_TEMP/uv-default-after.txt"
+          while IFS= read -r d; do if [ -d "$d" ]; then for f in "$d"/* "$d"/.[!.]*; do if [ -e "$f" ]; then echo "$f"; fi; done; fi; done < "$RUNNER_TEMP/uv-default-dirs.txt" > "$RUNNER_TEMP/uv-default-after.txt"
           if ! diff "$RUNNER_TEMP/uv-default-before.txt" "$RUNNER_TEMP/uv-default-after.txt"; then echo "::error::setup wrote into uv's default folders"; exit 1; fi
           ls "$TAD_CLIP_HOME/python" "$TAD_CLIP_HOME/cache/uv" > /dev/null
           echo "ok: uv Python + cache are inside $TAD_CLIP_HOME"
