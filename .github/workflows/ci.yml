@@ -1,0 +1,198 @@
+# Install the kit the way a user does, then unit tests + an end-to-end smoke render.
+# Windows runs on every push (any branch) and on pull requests from forks (same-repo PRs already ran on push).
+# macOS bills 10×, so it runs only on a manual run
+# (Actions → ci → Run workflow, os = both/macos) or when the pushed head commit message contains [mac-ci].
+# whisper `base` (whisper.cpp ggml on macOS, faster-whisper on Windows); model + uv caches are saved only when the
+# whole job passed; superseded runs are cancelled.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: "Which OS to run"
+        type: choice
+        options: [both, macos, windows]
+        default: both
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TAD_CLIP_TEST_MODEL: base
+  TAD_CLIP_MODEL: base
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+
+defaults:
+  run:
+    shell: bash   # Git Bash on Windows — the same shell Claude Code's Bash tool uses there
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    # a PR from a branch of this repo was already tested by its push → only fork PRs run here
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.os == 'macos' && '["macos-14"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-14","windows-latest"]') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[mac-ci]') && '["macos-14","windows-latest"]' || '["windows-latest"]')) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — no owner-specific strings in the kit
+        run: |
+          PYBIN=python; [ "$RUNNER_OS" = macOS ] && PYBIN=python3
+          "$PYBIN" tests/guard_owner_strings.py
+
+      - name: Paths + cache keys
+        id: keys
+        run: |
+          tmp="$RUNNER_TEMP"
+          if [ "$RUNNER_OS" = "Windows" ]; then tmp="$(cygpath -m "$RUNNER_TEMP")"; fi
+          echo "TAD_CLIP_HOME=$tmp/tadclip" >> "$GITHUB_ENV"
+          echo "ARTIFACTS=$tmp/smoke-artifacts" >> "$GITHUB_ENV"
+          # the cache key names what is cached: whisper.cpp ggml (macOS, pinned revision) or the faster-whisper model (Windows)
+          if [ "$RUNNER_OS" = macOS ]; then
+            rev=$(grep -oE 'GGML_REV = "[0-9a-f]{40}"' engine/install/__init__.py | grep -oE '[0-9a-f]{40}')
+            echo "models=models-macOS-ggml-base-${rev:0:12}" >> "$GITHUB_OUTPUT"
+          else
+            echo "models=models-$RUNNER_OS-faster-whisper-base-v1" >> "$GITHUB_OUTPUT"
+          fi
+
+      # setup.py keeps uv's cache in <home>/cache/uv by itself; CI only restores/saves that folder
+      - name: Restore whisper model
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/tadclip/models
+          key: ${{ steps.keys.outputs.models }}
+
+      - name: Restore uv downloads
+        id: uv-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/tadclip/cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('engine/install/requirements*.txt') }}
+
+      - name: uv's default folders (before install)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then set -- "$APPDATA/uv/python" "$APPDATA/uv/data/python" "$LOCALAPPDATA/uv/cache"
+          else set -- "$HOME/.local/share/uv/python" "$HOME/.cache/uv"; fi
+          for d in "$@"; do if [ -d "$d" ]; then for f in "$d"/* "$d"/.[!.]*; do if [ -e "$f" ]; then echo "$f"; fi; done; fi; done > "$RUNNER_TEMP/uv-default-before.txt"
+          printf '%s\n' "$@" > "$RUNNER_TEMP/uv-default-dirs.txt"
+
+      - name: Install (macOS — system python3, Homebrew)
+        if: runner.os == 'macOS'
+        run: /usr/bin/python3 engine/install/setup.py --yes --model base
+
+      - name: Install (Windows — bootstrap uv, no system Python, no admin)
+        if: runner.os == 'Windows'
+        run: |
+          # identical to the bootstrap lines in skills/tad-clip-setup/SKILL.md
+          powershell -NoProfile -ExecutionPolicy Bypass -Command '$ProgressPreference = 0; [Net.ServicePointManager]::SecurityProtocol = 3072; $h = $env:TAD_CLIP_HOME; if (-not $h) { $h = Join-Path $env:USERPROFILE .tad-clip }; $b = Join-Path $h bin; New-Item -ItemType Directory -Force -Path $b | Out-Null; $z = Join-Path $b uv.zip; Invoke-WebRequest -UseBasicParsing -Uri https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath $b; Remove-Item $z'
+          TC_HOME="${TAD_CLIP_HOME:-$HOME/.tad-clip}"
+          UV_PYTHON_INSTALL_DIR="$TC_HOME/python" UV_PYTHON_BIN_DIR="$TC_HOME/python/bin" UV_CACHE_DIR="$TC_HOME/cache/uv" UV_PYTHON_INSTALL_REGISTRY=0 "$TC_HOME/bin/uv.exe" run --no-project --python 3.12 engine/install/setup.py --yes --model base
+
+      - name: Nothing new outside the kit home
+        run: |
+          # setup must not add a Python or a cache in uv's default places: deleting the kit home has to free everything
+          while IFS= read -r d; do if [ -d "$d" ]; then for f in "$d"/* "$d"/.[!.]*; do if [ -e "$f" ]; then echo "$f"; fi; done; fi; done < "$RUNNER_TEMP/uv-default-dirs.txt" > "$RUNNER_TEMP/uv-default-after.txt"
+          if ! diff "$RUNNER_TEMP/uv-default-before.txt" "$RUNNER_TEMP/uv-default-after.txt"; then echo "::error::setup wrote into uv's default folders"; exit 1; fi
+          ls "$TAD_CLIP_HOME/python" "$TAD_CLIP_HOME/cache/uv" > /dev/null
+          echo "ok: uv Python + cache are inside $TAD_CLIP_HOME"
+
+      - name: setup.py launched from Windows PowerShell 5.1 (plan only — the line in SKILL.md)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $k = "."
+          $h = if ($env:TAD_CLIP_HOME) { $env:TAD_CLIP_HOME } else { Join-Path $env:USERPROFILE .tad-clip }; $env:UV_PYTHON_INSTALL_DIR = "$h\python"; $env:UV_PYTHON_BIN_DIR = "$h\python\bin"; $env:UV_CACHE_DIR = "$h\cache\uv"; $env:UV_PYTHON_INSTALL_REGISTRY = "0"; & "$h\bin\uv.exe" run --no-project --python 3.12 (Join-Path $k engine\install\setup.py)
+          if ($LASTEXITCODE -ne 2) { Write-Error "expected exit 2 (plan shown, nothing installed), got $LASTEXITCODE"; exit 1 }
+          Write-Output "ok: setup.py runs from PowerShell"
+          exit 0
+
+      - name: Test tools (pytest from requirements-dev.txt — never installed for users)
+        id: tools
+        run: |
+          PY="$TAD_CLIP_HOME/venv/bin/python"
+          [ -f "$PY" ] || PY="$TAD_CLIP_HOME/venv/Scripts/python.exe"
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          UV=$("$PY" -c "from engine import kit; print(kit.tool('uv'))")
+          UV_CACHE_DIR="$TAD_CLIP_HOME/cache/uv" "$UV" pip install --python "$PY" -r engine/install/requirements-dev.txt
+          echo "NODE=$("$PY" -c "from engine import kit; print(kit.tool('node'))")" >> "$GITHUB_ENV"
+          mkdir -p "$ARTIFACTS"
+          "$PY" engine/doctor.py --json > "$ARTIFACTS/doctor.json" || true
+          "$PY" engine/doctor.py
+
+      - name: Test-only model (macOS) — faster-whisper base for tests that force the fallback backend
+        if: runner.os == 'macOS'
+        run: |
+          "$PY" -c "import sys; from faster_whisper.utils import download_model; download_model('base', cache_dir=sys.argv[1])" "$TAD_CLIP_HOME/models"
+
+      - name: Unit tests (pytest)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        timeout-minutes: 20
+        # a hung test (an ffmpeg that never exits) dumps every thread and ends the run after 5 min instead of eating the job
+        run: '"$PY" -m pytest -v -m "not network" -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true --durations=15'
+
+      - name: Unit tests (node)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        timeout-minutes: 10
+        run: '"$NODE" --test "tests/*.test.mjs"'
+
+      - name: Probe — faster-whisper model in a Thai + space folder (Windows, info only)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' && runner.os == 'Windows' }}
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          "$PY" - <<'EOF'
+          import pathlib, shutil, tempfile
+          from engine import install as inst, kit
+          src = inst.model_dir("base", kit.models_dir())
+          dst = pathlib.Path(tempfile.mkdtemp()) / "โมเดล ทดสอบ"
+          shutil.copytree(src, dst)
+          from faster_whisper import WhisperModel
+          WhisperModel(str(dst), device="cpu", compute_type="int8")
+          print("OK: faster-whisper loads a model from", dst)
+          EOF
+
+      - name: Smoke (fixture → final.mp4)
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        timeout-minutes: 20
+        run: '"$PY" tests/smoke/smoke.py --artifacts "$ARTIFACTS"'
+
+      - name: Save whisper model (only when everything passed)
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/tadclip/models
+          key: ${{ steps.keys.outputs.models }}
+
+      - name: Save uv downloads (only when everything passed)
+        if: success() && steps.uv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/tadclip/cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('engine/install/requirements*.txt') }}
+
+      - name: Upload smoke output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: ${{ runner.temp }}/smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7

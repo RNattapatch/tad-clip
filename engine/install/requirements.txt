@@ -1,0 +1,6 @@
+# Kit runtime (setup.py installs these into <home>/venv). Upper bounds = next major version: a new major release
+# can change APIs, so it has to be tested here first.
+faster-whisper>=1.1,<2
+pythainlp>=5.0,<6
+numpy>=2,<3
+Pillow>=11,<13
