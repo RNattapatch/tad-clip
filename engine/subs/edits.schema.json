@@ -1,12 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "tad-clip subtitle edits (edits.json)",
-  "description": "Written by Claude after reading review.md. Every cue number i refers to the numbering in review.md (the raw cues), never to a renumbered list. A cue can be touched by one entry only. If more than half of the cues are touched, finalize refuses (exit 3).",
+  "description": "Written by Claude after reading review.md. Every cue number i refers to the numbering in review.md (the raw cues), never to a renumbered list. A cue can have one correction and can be part of one resplit (the resplit is applied after the corrections, so its lines must use the corrected words); a dropped cue cannot be touched by anything else. If more than half of the cues are touched, finalize refuses (exit 3).",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "corrections": {
-      "description": "Fix the wording of one cue. Timing is kept. from must equal the cue text exactly.",
+      "description": "Fix the wording of one cue. Timing is kept. from must equal the cue text exactly. The same cue may also be part of a resplit.",
       "type": "array",
       "items": {
         "type": "object",
@@ -21,7 +21,7 @@
       }
     },
     "resplit": {
-      "description": "Move the line break between adjacent cues (or split one cue). The spoken words must stay the same; only spaces and break positions may change.",
+      "description": "Move the line break between adjacent cues (or split one cue). Applied after the corrections: the lines in `to` must hold the same words as the (corrected) cues, only spaces and break positions may change.",
       "type": "array",
       "items": {
         "type": "object",

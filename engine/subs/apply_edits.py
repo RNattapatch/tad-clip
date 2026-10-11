@@ -50,6 +50,82 @@ def rms_db(wav_path, from_ms, to_ms):
     return -120.0 if rms < 1 else max(-120.0, 20 * math.log10(rms / 32768))
 
 
+FRAME_MS = 10       # frame size of the level analysis
+PAUSE_MS = 150      # shortest silence that counts as a pause (a word break the speaker really made)
+
+
+def _frame_db(wav_path):
+    """Level in dBFS of every 10 ms frame of a 16-bit PCM wav ([] when it cannot be read)."""
+    try:
+        with wave.open(str(wav_path)) as w:
+            if w.getsampwidth() != 2:
+                return []
+            rate, ch = w.getframerate(), w.getnchannels()
+            data = array.array("h", w.readframes(w.getnframes()))
+    except (OSError, wave.Error, EOFError):
+        return []
+    if sys.byteorder == "big":
+        data.byteswap()
+    if ch > 1:
+        data = data[::ch]
+    n = max(1, rate * FRAME_MS // 1000)
+    out = []
+    for i in range(0, len(data) - n + 1, n):
+        rms = math.sqrt(sum(x * x for x in data[i:i + n]) / n)
+        out.append(-120.0 if rms < 1 else max(-120.0, 20 * math.log10(rms / 32768)))
+    return out
+
+
+def pause_threshold(levels):
+    """Silence threshold that follows the recording's own noise floor: the 10th-percentile level + 12 dB,
+    kept between -48 and -34 dBFS."""
+    floor = sorted(levels)[len(levels) // 10]
+    return min(-34.0, max(-48.0, floor + 12))
+
+
+def find_pauses(wav_path, min_ms=PAUSE_MS, noise_db=None):
+    """Silences of at least min_ms in audio.wav -> [(start_ms, end_ms), ...] (empty when the audio is unreadable)."""
+    levels = _frame_db(wav_path)
+    if not levels:
+        return []
+    thr = pause_threshold(levels) if noise_db is None else noise_db
+    out, start = [], None
+    for k, db in enumerate(levels + [0.0]):                       # the sentinel closes a silence that runs to the end
+        if db < thr:
+            start = k if start is None else start
+        elif start is not None:
+            if (k - start) * FRAME_MS >= min_ms:
+                out.append((start * FRAME_MS, k * FRAME_MS))
+            start = None
+    return out
+
+
+def snap_window(pauses, start_s, end_s=None, reach_s=3.0):
+    """Move a patch window so it begins and ends in silence, never making it narrower.
+
+    start goes back to the middle of the nearest earlier pause, end goes forward to the middle of the nearest later
+    pause (each within reach_s). A boundary already inside a pause is kept. -> (start_s, end_s, notes)"""
+    notes = []
+
+    def pick(sec, back, flag):
+        ms = sec * 1000
+        if any(a <= ms <= b for a, b in pauses):
+            return sec
+        mids = [(a + b) / 2 for a, b in pauses if ((a + b) / 2 <= ms if back else (a + b) / 2 >= ms)
+                and abs((a + b) / 2 - ms) <= reach_s * 1000]
+        if not mids:
+            notes.append(f"{flag} {sec:g} ไม่พบช่วงเงียบ{'ก่อนหน้า' if back else 'ถัดไป'}ภายใน {reach_s:g} วินาที — ใช้ค่าเดิม (อาจตัดกลางคำ)")
+            return sec
+        mid = max(mids) if back else min(mids)
+        a, b = next((a, b) for a, b in pauses if (a + b) / 2 == mid)
+        notes.append(f"{flag} {sec:g} -> {mid / 1000:g} (กลางช่วงเงียบ {a / 1000:.2f}-{b / 1000:.2f})")
+        return mid / 1000
+
+    start = pick(start_s, True, "--from")
+    end = None if end_s is None else pick(end_s, False, "--to")
+    return start, end, notes
+
+
 def fmt_t(ms):
     cs = int(round(ms / 10))
     m, cs = divmod(cs, 6000)
@@ -103,10 +179,11 @@ def find_flags(cues, applied_fixes, glossary, wav=None):
 
 _EXAMPLE = """{
   "corrections": [
-    {"i": 12, "from": "เปิดคอร์ทโค้ดแล้ว", "to": "เปิด Claude Code แล้ว", "why": "ศัพท์เครื่องมือถอดเพี้ยน"}
+    {"i": 12, "from": "เปิดคอร์ทโค้ดแล้ว", "to": "เปิด Claude Code แล้ว", "why": "ศัพท์เครื่องมือถอดเพี้ยน"},
+    {"i": 21, "from": "เสียยอกขายกว่า 2 วัน", "to": "เสียยอดขายกว่า 2 วัน", "why": "สะกดผิด"}
   ],
   "resplit": [
-    {"i": [20, 21], "to": ["มองโบรชัวร์", "แล้วจดข้อมูลสำคัญ"], "why": "รอยตัดอยู่กลางคำ"}
+    {"i": [20, 21], "to": ["ละเอียดและแก้ไข", "ยอมเสียยอดขายกว่า 2 วัน"], "why": "รอยตัดอยู่กลางคำ (cue 21 ถูกแก้คำด้านบนด้วย บรรทัดใหม่จึงใช้คำที่แก้แล้ว)"}
   ],
   "drop": [
     {"i": 3, "from": "ข้อความทั้งบรรทัดที่ซ้ำ", "why": "ซ้ำกับตัวอักษรที่ฝังบนจอแล้ว"}
@@ -114,7 +191,7 @@ _EXAMPLE = """{
   "flags": [
     {"i": 31, "note": "ไม่แน่ใจว่าพูดว่า ดีล หรือ ดิว"}
   ],
-  "notes": "แก้ 1 จุด ย้ายรอยตัด 1 จุด ลบ 1 บรรทัด"
+  "notes": "แก้ 2 จุด ย้ายรอยตัด 1 จุด ลบ 1 บรรทัด"
 }"""
 
 
@@ -145,13 +222,15 @@ def review_markdown(name, cues, flags, max_chars, work_dir, wav=None):
         "1. แก้เฉพาะคำที่ฟังผิดชัดๆ: ชื่อเฉพาะหรือศัพท์เครื่องมือที่ถอดเพี้ยน, คำไทยสะกดผิดจนอ่านสะดุด, ภาษาอังกฤษที่ถอดเป็นคำอ่านไทย",
         "2. ห้ามเกลาสำนวน ห้ามตัดคำพูดติดปาก (ครับ นะ เนี่ย) ห้ามเติมคำที่ไม่ได้พูด — ซับคือคำพูดจริง",
         "3. ไม่มั่นใจ = ใส่ใน `flags` อย่าแก้ · ไม่มีจุดที่ต้องแก้ = ไม่ต้องเขียนไฟล์ แล้วรัน finalize ได้เลย",
-        "4. `from` ต้องตรงกับบรรทัดเดิมทุกตัวอักษร · เลข `i` คือเลข cue ในรายการด้านล่าง (เลขเดิม ไม่ต้องเลื่อนเมื่อมีหลายรายการ) · cue หนึ่งแตะได้รายการเดียว",
-        "5. แตะเกินครึ่งของ cue = เครื่องไม่รับ (exit 3) แปลว่าถอดเสียงผิดทั้งคลิป ให้ถอดใหม่ ไม่ใช่แก้ทีละคำ",
+        "4. `from` ต้องตรงกับบรรทัดเดิมทุกตัวอักษร · เลข `i` คือเลข cue ในรายการด้านล่าง (เลขเดิม ไม่ต้องเลื่อนเมื่อมีหลายรายการ)",
+        "5. cue หนึ่งมี `corrections` ได้รายการเดียว และอยู่ใน `resplit` ได้รายการเดียว (`drop` ใช้ได้เมื่อไม่มีรายการอื่นแตะ cue นั้น)",
+        "6. **แก้คำและย้ายรอยตัดใน cue เดียวกัน**: ใส่การแก้คำใน `corrections` ตามปกติ แล้วใน `resplit` เขียนบรรทัดใหม่ด้วย **คำที่แก้แล้ว** (ระบบแก้คำก่อน แล้วค่อยย้ายรอยตัด) ดู cue 21 ในตัวอย่าง · `resplit` ย้ายรอยตัดได้อย่างเดียว ถ้าเปลี่ยนคำในบรรทัดใหม่โดยไม่ผ่าน `corrections` จะถูกตีกลับ",
+        "7. แตะเกินครึ่งของ cue = เครื่องไม่รับ (exit 3) แปลว่าถอดเสียงผิดทั้งคลิป ให้ถอดใหม่ ไม่ใช่แก้ทีละคำ",
         "",
         "| key | ใช้ทำอะไร | รูปแบบของแต่ละรายการ |",
         "|---|---|---|",
         "| `corrections` | แก้คำใน 1 cue (เวลาเดิม) | `{\"i\": เลข, \"from\": บรรทัดเดิมทั้งบรรทัด, \"to\": บรรทัดที่แก้แล้ว, \"why\": เหตุผลสั้นๆ}` |",
-        "| `resplit` | ย้ายรอยตัดระหว่าง cue ที่ติดกัน (คำพูดต้องเหมือนเดิม) | `{\"i\": [เลขที่ติดกัน], \"to\": [บรรทัดใหม่...], \"why\": ...}` |",
+        "| `resplit` | ย้ายรอยตัดระหว่าง cue ที่ติดกัน (คำพูดต้องเหมือนเดิม หลังแก้คำแล้ว) | `{\"i\": [เลขที่ติดกัน], \"to\": [บรรทัดใหม่...], \"why\": ...}` |",
         "| `drop` | ลบ cue (เช่น ซ้ำกับตัวอักษรบนจอ) | `{\"i\": เลข, \"from\": บรรทัดเดิม, \"why\": ...}` |",
         "| `flags` | สงสัยแต่ไม่แก้ | `{\"i\": เลข, \"note\": ...}` |",
         "| `notes` | สรุปสั้นๆ | ข้อความ |",
@@ -255,22 +334,24 @@ class Result:
 def apply_edits(cues, doc, max_chars):
     """Validate every entry against the raw cues and apply the ones that pass.
 
-    Rejected (kept out, listed in the report): `from` that does not match the line, empty or unchanged text,
-    a line over max_chars + 6, a length change beyond 2x or below 0.5x, resplit that changes the wording or
-    is not adjacent, a cue already touched by another entry. If the accepted entries touch more than half of
-    the cues nothing is applied (too_many)."""
+    Order: corrections, then resplit (on the corrected words), then drop. So one cue can be corrected *and* be part
+    of a resplit: the resplit's `to` lines must use the corrected words. Rejected (kept out, listed in the report
+    with the real cue text): `from` that does not match the line, empty or unchanged text, a line over
+    max_chars + 6, a length change beyond 2x or below 0.5x, a resplit that changes the wording or is not adjacent,
+    a cue corrected twice, in two resplits or dropped after another entry took it. If the accepted entries touch
+    more than half of the cues nothing is applied (too_many)."""
     n = len(cues)
     res = Result(cues, n)
     res.notes = doc.get("notes", "") or ""
     res.flags = list(doc.get("flags", []))
     limit = max_chars + 6
-    touched, repl, skip = set(), {}, set()
+    corrected, taken, repl, skip = set(), set(), {}, set()     # taken = in a resplit or dropped
 
-    def reject(kind, e, why):
-        res.rejected.append({"kind": kind, "i": e["i"], "from": e.get("from"), "to": e.get("to"), "reason": why})
+    def cur(k):
+        return repl[k][0] if k in corrected else cues[k]
 
-    def free(idxs):
-        return not any(k in touched for k in idxs)
+    def reject(kind, e, why, actual=None):
+        res.rejected.append({"kind": kind, "i": e["i"], "to": e.get("to"), "actual": actual, "reason": why})
 
     for e in doc.get("corrections", []):
         i = e["i"]
@@ -280,21 +361,21 @@ def apply_edits(cues, doc, max_chars):
         cue = cues[i - 1]
         old, to = norm(cue["t"]), norm(e["to"])
         if norm(e["from"]) != old:
-            reject("correction", e, "ข้อความเดิมไม่ตรงกับ cue จริง (น่าจะเดาเอง)")
+            reject("correction", e, f"ข้อความเดิมไม่ตรงกับ cue จริง (น่าจะเดาเอง) — ที่ส่งมา: {norm(e['from'])}", old)
         elif not to:
-            reject("correction", e, "แก้เป็นบรรทัดว่าง")
+            reject("correction", e, "แก้เป็นบรรทัดว่าง", old)
         elif to == old:
-            reject("correction", e, "เหมือนเดิม")
+            reject("correction", e, "เหมือนเดิม", old)
         elif len(to) > limit:
-            reject("correction", e, f"ยาวเกินเพดาน ({len(to)} > {limit})")
+            reject("correction", e, f"ยาวเกินเพดาน ({len(to)} > {limit})", old)
         elif not 0.5 <= len(to) / max(1, len(old)) <= 2:
-            reject("correction", e, f"ความยาวเปลี่ยนเกินเท่าตัว ({len(to) / max(1, len(old)):.2f}x) — น่าจะเขียนใหม่ ไม่ใช่แก้คำ")
-        elif not free([i - 1]):
-            reject("correction", e, "cue นี้ถูกรายการอื่นแตะไปแล้ว")
+            reject("correction", e, f"ความยาวเปลี่ยนเกินเท่าตัว ({len(to) / max(1, len(old)):.2f}x) — น่าจะเขียนใหม่ ไม่ใช่แก้คำ", old)
+        elif i - 1 in corrected:
+            reject("correction", e, "cue นี้ถูกแก้คำไปแล้วโดยรายการอื่น", old)
         else:
             new = dict(cue)
             new["t"], new["words"] = to, realign_words(cue, to)
-            touched.add(i - 1)
+            corrected.add(i - 1)
             repl[i - 1] = [new]
             res.applied.append({"kind": "correction", "i": i, "from": cue["t"], "to": to, "why": e.get("why", "")})
 
@@ -303,51 +384,65 @@ def apply_edits(cues, doc, max_chars):
         pieces = [norm(p) for p in e["to"]]
         if not all(0 <= k < n for k in idxs):
             reject("resplit", e, "เลข cue ไม่มีอยู่จริง")
-        elif idxs != list(range(idxs[0], idxs[0] + len(idxs))):
-            reject("resplit", e, "cue ต้องเรียงติดกัน")
+            continue
+        actual = [norm(cur(k)["t"]) for k in idxs]                 # the text as it stands after the word corrections
+        if idxs != list(range(idxs[0], idxs[0] + len(idxs))):
+            reject("resplit", e, "cue ต้องเรียงติดกัน", actual)
         elif not all(pieces):
-            reject("resplit", e, "มีบรรทัดใหม่ที่ว่าง")
-        elif _squash("".join(pieces)) != _squash("".join(cues[k]["t"] for k in idxs)):
-            reject("resplit", e, "ข้อความใหม่ต่อกันแล้วไม่ตรงคำพูดเดิม (ย้ายรอยตัดได้อย่างเดียว ห้ามเปลี่ยนคำ)")
+            reject("resplit", e, "มีบรรทัดใหม่ที่ว่าง", actual)
+        elif _squash("".join(pieces)) != _squash("".join(actual)):
+            reject("resplit", e, "ข้อความใหม่ต่อกันแล้วไม่ตรงคำพูดเดิม — ย้ายรอยตัดได้อย่างเดียว ถ้าจะแก้คำด้วยให้ใส่ใน `corrections` "
+                                 "(cue เดียวกันได้) แล้วเขียนบรรทัดใหม่ด้วยคำที่แก้แล้ว (ข้อความข้างหน้าคือคำที่แก้แล้วของตอนนี้)", actual)
         elif any(len(p) > limit for p in pieces):
-            reject("resplit", e, f"บรรทัดใหม่ยาวเกินเพดาน ({max(map(len, pieces))} > {limit})")
-        elif not free(idxs):
-            reject("resplit", e, "cue นี้ถูกรายการอื่นแตะไปแล้ว")
+            reject("resplit", e, f"บรรทัดใหม่ยาวเกินเพดาน ({max(map(len, pieces))} > {limit})", actual)
+        elif any(k in taken for k in idxs):
+            reject("resplit", e, "cue นี้อยู่ใน resplit อื่นไปแล้ว", actual)
         else:
             try:
-                out = resplit_group([cues[k] for k in idxs], pieces)
+                out = resplit_group([cur(k) for k in idxs], pieces)
             except (ValueError, IndexError) as ex:
-                reject("resplit", e, f"ใส่เวลาให้บรรทัดใหม่ไม่ได้ ({ex})")
+                reject("resplit", e, f"ใส่เวลาให้บรรทัดใหม่ไม่ได้ ({ex})", actual)
                 continue
-            touched.update(idxs)
+            taken.update(idxs)
             repl[idxs[0]] = out
             skip.update(idxs[1:])
-            res.applied.append({"kind": "resplit", "i": e["i"], "from": [cues[k]["t"] for k in idxs], "to": pieces, "why": e.get("why", "")})
+            res.applied.append({"kind": "resplit", "i": e["i"], "from": actual, "to": pieces, "why": e.get("why", "")})
 
     for e in doc.get("drop", []):
         i = e["i"]
         if not 1 <= i <= n:
             reject("drop", e, "เลข cue ไม่มีอยู่จริง")
         elif norm(e["from"]) != norm(cues[i - 1]["t"]):
-            reject("drop", e, "ข้อความเดิมไม่ตรงกับ cue จริง (น่าจะเดาเอง)")
-        elif not free([i - 1]):
-            reject("drop", e, "cue นี้ถูกรายการอื่นแตะไปแล้ว")
+            reject("drop", e, f"ข้อความเดิมไม่ตรงกับ cue จริง (น่าจะเดาเอง) — ที่ส่งมา: {norm(e['from'])}", norm(cues[i - 1]["t"]))
+        elif i - 1 in corrected or i - 1 in taken:
+            reject("drop", e, "cue นี้ถูกรายการอื่นแตะไปแล้ว", norm(cur(i - 1)["t"]))
         else:
-            touched.add(i - 1)
+            taken.add(i - 1)
             repl[i - 1] = []
             res.applied.append({"kind": "drop", "i": i, "from": cues[i - 1]["t"], "to": None, "why": e.get("why", "")})
 
-    res.changed = len(touched)
+    res.changed = len(corrected | taken)
     res.too_many = res.changed > n * GUARD
-    if not res.too_many and touched:
+    if not res.too_many and (corrected or taken):
         out = []
         for idx, c in enumerate(cues):
-            if idx in repl:
-                out.extend(repl[idx])
-            elif idx not in skip:
-                out.append(c)
+            if idx in skip:
+                continue
+            out.extend(repl[idx]) if idx in repl else out.append(c)
         res.cues = out
     return res
+
+
+def _join(x):
+    return " | ".join(x) if isinstance(x, list) else (x or "")
+
+
+def _rejected_line(r):
+    """cue 27: <real text now> → <what was proposed> — <why>. The real text is always printed."""
+    cue = r["i"] if not isinstance(r["i"], list) else ", ".join(map(str, r["i"]))
+    actual = _join(r.get("actual")) or "(ไม่มีข้อความ)"
+    proposed = _join(r.get("to")) or "(ไม่มี)"
+    return f"- cue {cue}: {actual} → {proposed} — {r['reason']}"
 
 
 def report_markdown(name, res, edits_name="edits.json"):
@@ -373,7 +468,7 @@ def report_markdown(name, res, edits_name="edits.json"):
     lines += ["", "## สงสัย (ไม่ได้แก้ ให้คนตัดสิน)", ""]
     lines += [f"- cue {f.get('i')}: {f.get('note', '')}" for f in res.flags] or ["ไม่มี"]
     lines += ["", "## ตีกลับ (โค้ดไม่ยอมให้แก้)", ""]
-    lines += [f"- cue {r['i']}: {r['from'] if r['from'] is not None else ''} → {r['to'] if r['to'] is not None else ''} — {r['reason']}" for r in res.rejected] or ["ไม่มี"]
+    lines += [_rejected_line(r) for r in res.rejected] or ["ไม่มี"]
     if res.notes:
         lines += ["", "## บันทึก", "", res.notes]
     return "\n".join(lines) + "\n"

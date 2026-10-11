@@ -1,4 +1,4 @@
-"""CLI: python -m engine.subs <video> -o <dir> | finalize <dir> | patch <dir> | burn <video> <ass>.
+"""CLI: python -m engine.subs <video> -o <dir> | finalize <dir> | patch <dir> | pauses <dir> | burn <video> <ass>.
 
 Exit codes: 0 ok, 2 bad input or missing piece (message in Thai on stderr), 3 edits touch more than half the cues.
 """
@@ -156,11 +156,11 @@ def _cmd_run(argv):
     cues = doc["cues"]
     _say(f"3/3 {'ตัดซับ' if built else 'ใช้ซับดิบเดิม'} → raw.cues.json ({len(cues)} cue)")
     flags = ae.find_flags(cues, doc["meta"].get("fixes_applied", []), glossary, wav)
-    _say(f"\nต่อไป: อ่าน {d / 'review.md'} แล้วเขียน edits.json (ถ้ามีคำผิด) จากนั้น finalize")
     if flags:
-        _say(f"ธง {len(flags)} จุด:")
+        _say(f"\nธง {len(flags)} จุด:")
         for f in flags[:10]:
             _say(f"  - cue {f['cue']}: {f['text']}" if f["cue"] else f"  - {f['text']}")
+    _say(f"\nต่อไป: อ่าน {d / 'review.md'} แล้วเขียน edits.json (ถ้ามีคำผิด) จากนั้น finalize")   # always the last line
     return 0
 
 
@@ -265,6 +265,7 @@ def _cmd_patch(argv):
     ap.add_argument("dir")
     ap.add_argument("--from", dest="start", type=float, required=True, help="วินาทีเริ่ม (ถอยไปที่รอยหายใจก่อนจุดที่หาย)")
     ap.add_argument("--to", dest="end", type=float, help="วินาทีจบ (ไม่ใส่ = ถึงท้ายคลิป)")
+    ap.add_argument("--no-snap", action="store_true", help="ใช้ --from/--to ตามที่ใส่เป๊ะ ไม่ขยับไปหาช่วงเงียบ")
     a = ap.parse_args(argv)
 
     d = Path(a.dir)
@@ -278,6 +279,10 @@ def _cmd_patch(argv):
     meta = {}
     if (d / "raw.cues.json").is_file():
         meta = _read_json(d / "raw.cues.json", "ซับดิบ").get("meta", {})
+    if not a.no_snap:           # a cut inside a word leaves half a word at the seam, so start and end in a pause
+        a.start, a.end, notes = ae.snap_window(ae.find_pauses(wav), a.start, a.end)
+        for n in notes:
+            _say("ปรับช่วงให้เริ่ม/จบในช่วงเงียบ: " + n)
     piece = d / f"patch-{int(a.start * 1000)}.wav"
     extract_audio(wav, piece, a.start, None if a.end is None else a.end - a.start)
     try:
@@ -293,6 +298,54 @@ def _cmd_patch(argv):
     build_raw(d, meta.get("name") or d.name, meta.get("max_chars"), False, True, cfg)
     _say(f"ถอด {a.start:g}-{'ท้ายคลิป' if a.end is None else format(a.end, 'g')} วิ ใหม่แล้ว และตัดซับดิบใหม่ (ของเดิมเก็บที่ {backup.name})")
     _say(f"เลข cue เปลี่ยนแล้ว — อ่าน {d / 'review.md'} ใหม่ แล้วเขียน edits.json ใหม่ (edits เดิมจะถูกโค้ดตีกลับถ้าบรรทัดไม่ตรง)")
+    return 0
+
+
+# ── pauses: where it is safe to cut ────────────────────────────────────────────────────────
+
+def _where(cues, ms):
+    """'ใน cue N' when the time falls inside a cue, else 'ระหว่าง cue N-M'."""
+    for n, c in enumerate(cues, 1):
+        if c["f"] <= ms <= c["to"]:
+            return f"ใน cue {n}"
+    before = sum(1 for c in cues if c["to"] < ms)
+    if before == 0:
+        return "ก่อน cue แรก"
+    return "หลัง cue สุดท้าย" if before == len(cues) else f"ระหว่าง cue {before}-{before + 1}"
+
+
+def _cmd_pauses(argv):
+    ap = argparse.ArgumentParser(prog="python -m engine.subs pauses", description="แสดงช่วงเงียบใน audio.wav ไว้เลือกจุดเริ่ม/จบของ patch")
+    ap.add_argument("dir")
+    ap.add_argument("--around", type=float, help="วินาทีที่สนใจ (ไม่ใส่ = ทั้งคลิป)")
+    ap.add_argument("--within", type=float, default=5.0, help="รัศมีรอบ --around เป็นวินาที (ค่าเริ่มต้น 5)")
+    ap.add_argument("--min-ms", type=int, default=ae.PAUSE_MS, help="ช่วงเงียบสั้นสุดที่นับ (ค่าเริ่มต้น 150 ms)")
+    ap.add_argument("--noise-db", type=float, help="เกณฑ์ความเงียบ dBFS (ค่าเริ่มต้นปรับตามเสียงรบกวนของคลิป)")
+    a = ap.parse_args(argv)
+    d = Path(a.dir)
+    wav = d / "audio.wav"
+    if not wav.is_file():
+        raise kit.KitError(f"ไม่พบ audio.wav ใน {d} — รัน `python -m engine.subs <คลิป> -o \"{d}\"` ก่อน")
+    levels = ae._frame_db(wav)
+    if not levels:
+        raise kit.KitError(f"อ่าน {wav.name} ไม่ได้ (ต้องเป็น wav 16-bit)")
+    thr = ae.pause_threshold(levels) if a.noise_db is None else a.noise_db
+    pauses = ae.find_pauses(wav, a.min_ms, a.noise_db)
+    cues = _read_json(d / "raw.cues.json", "ซับดิบ")["cues"] if (d / "raw.cues.json").is_file() else []
+    scope = ""
+    if a.around is not None:
+        lo, hi = (a.around - a.within) * 1000, (a.around + a.within) * 1000
+        pauses = [p for p in pauses if p[1] >= lo and p[0] <= hi]
+        scope = f" รอบ {a.around:g} วินาที ±{a.within:g}"
+    _say(f"ช่วงเงียบ >= {a.min_ms} ms ใน {wav.name} (เกณฑ์ {thr:.0f} dBFS){scope}: {len(pauses)} ช่วง")
+    for st, en in pauses[:100]:
+        mid = (st + en) / 2
+        where = f" · {_where(cues, mid)}" if cues else ""
+        _say(f"  {st / 1000:.2f}-{en / 1000:.2f} ({(en - st) / 1000:.2f} วิ) · กลาง {mid / 1000:.2f}{where}")
+    if len(pauses) > 100:
+        _say("  … ยังมีอีก ใส่ --around ให้แคบลง")
+    if pauses:
+        _say("ใช้เวลา 'กลาง' เป็น --from / --to ของ patch ได้เลย (patch ขยับเข้าหาช่วงเงียบเองอยู่แล้วถ้าไม่ใส่ --no-snap)")
     return 0
 
 
@@ -339,7 +392,7 @@ def _cmd_burn(argv):
 
 # ── entry ──────────────────────────────────────────────────────────────────────────────────
 
-_COMMANDS = {"finalize": _cmd_finalize, "patch": _cmd_patch, "burn": _cmd_burn}
+_COMMANDS = {"finalize": _cmd_finalize, "patch": _cmd_patch, "pauses": _cmd_pauses, "burn": _cmd_burn}
 
 
 def main(argv=None):

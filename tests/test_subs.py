@@ -428,6 +428,11 @@ def test_review_md_documents_edits_schema_with_example(tmp_path):
     schema = json.loads((ROOT / "engine" / "subs" / "edits.schema.json").read_text(encoding="utf-8"))
     assert set(example) <= set(schema["properties"])
     assert set(schema["properties"]) == {"corrections", "resplit", "drop", "flags", "notes"}
+    # the combined case (fix a word AND move the break on the same cue) is shown and explained
+    corrected = {e["i"] for e in example["corrections"]}
+    resplit_cues = {i for e in example["resplit"] for i in e["i"]}
+    assert corrected & resplit_cues
+    assert "คำที่แก้แล้ว" in md
 
 
 def _stalled_asr():
@@ -628,6 +633,76 @@ def test_resplit_moves_a_break_and_keeps_spans(tmp_path):
     assert r"{\k" in (d / "demo.karaoke.ass").read_text(encoding="utf-8")
 
 
+def _two_adjacent(raw):
+    """Indexes (1-based) of two adjacent cues whose joint text has a word we can 'mishear'."""
+    for k in range(len(raw) - 1):
+        if "ซับ" in raw[k + 1]["t"]:
+            return k + 1, k + 2
+    raise AssertionError("fixture changed")
+
+
+def test_correction_and_resplit_on_the_same_cue(tmp_path):
+    d = make_work(tmp_path)
+    raw = raw_cues(d)
+    a_i, b_i = _two_adjacent(raw)
+    a, b = raw[a_i - 1], raw[b_i - 1]
+    fixed_b = b["t"].replace("ซับ", "ซัป", 1)
+    joined = (a["t"] + fixed_b).replace(" ", "")
+    cut = len(a["t"].replace(" ", "")) - 2
+    new = [joined[:cut], joined[cut:]]
+    write_edits(d, {"corrections": [{"i": b_i, "from": b["t"], "to": fixed_b, "why": "สะกด"}],
+                    "resplit": [{"i": [a_i, b_i], "to": new, "why": "รอยตัดกลางคำ"}]})
+    assert cli.main(["finalize", str(d)]) == 0
+    final = json.loads((d / "cues.json").read_text(encoding="utf-8"))["cues"]
+    assert len(final) == len(raw)
+    assert [final[a_i - 1]["t"].replace(" ", ""), final[b_i - 1]["t"].replace(" ", "")] == new
+    assert "ซัป" in "".join(c["t"] for c in final)                                  # the word fix survived the break move
+    assert final[a_i - 1]["f"] == a["f"] and final[b_i - 1]["to"] == b["to"]
+    for c in final[a_i - 1:b_i]:
+        assert "".join(w["t"] for w in c["words"]) == c["t"]
+    rep = (d / "edits-report.md").read_text(encoding="utf-8")
+    assert "ตีกลับ 0" in rep and "ย้ายรอยตัด" in rep and "แก้ cue" in rep
+    assert r"{\k" in (d / "demo.karaoke.ass").read_text(encoding="utf-8")
+
+
+def test_combined_edit_counts_each_cue_once_for_the_guard():
+    cues = [{"t": f"คำ{i}", "f": i * 1000, "to": i * 1000 + 800, "words": [{"t": f"คำ{i}", "f": i * 1000, "to": i * 1000 + 800}]}
+            for i in range(4)]
+    doc = {"corrections": [{"i": 2, "from": "คำ1", "to": "คำ๑"}], "resplit": [{"i": [1, 2], "to": ["คำ0คำ", "๑"]}]}
+    res = apply_edits.apply_edits(cues, doc, 22)
+    assert res.changed == 2 and not res.too_many and len(res.applied) == 2
+
+
+def test_resplit_after_a_correction_must_use_the_corrected_words_and_the_report_shows_real_text(tmp_path):
+    d = make_work(tmp_path)
+    raw = raw_cues(d)
+    a_i, b_i = _two_adjacent(raw)
+    a, b = raw[a_i - 1], raw[b_i - 1]
+    fixed_b = b["t"].replace("ซับ", "ซัป", 1)
+    joined_old = (a["t"] + b["t"]).replace(" ", "")                                  # raw wording, not the corrected one
+    write_edits(d, {"corrections": [{"i": b_i, "from": b["t"], "to": fixed_b}],
+                    "resplit": [{"i": [a_i, b_i], "to": [joined_old[:6], joined_old[6:]]}]})
+    assert cli.main(["finalize", str(d)]) == 0
+    rep = (d / "edits-report.md").read_text(encoding="utf-8")
+    rejected = rep.split("## ตีกลับ")[1]
+    assert a["t"] in rejected and fixed_b in rejected                                 # the real (corrected) text is printed, never empty
+    assert "→  —" not in rejected and ":  →" not in rejected
+    assert "corrections" in rejected                                                  # and the message says how to do it right
+    final = json.loads((d / "cues.json").read_text(encoding="utf-8"))["cues"]
+    assert final[b_i - 1]["t"] == fixed_b                                             # the word fix still applied
+
+
+def test_rejected_entries_print_the_real_cue_text():
+    cues = [{"t": "สวัสดีครับ", "f": 0, "to": 900, "words": [{"t": "สวัสดี", "f": 0, "to": 600}, {"t": "ครับ", "f": 600, "to": 900}]},
+            {"t": "ยินดีที่ได้รู้จัก", "f": 900, "to": 2000, "words": [{"t": "ยินดี", "f": 900, "to": 1300}, {"t": "ที่ได้รู้จัก", "f": 1300, "to": 2000}]}]
+    res = apply_edits.apply_edits(cues, {"resplit": [{"i": [1, 2], "to": ["สวัสดีค่ะ", "ยินดี"]}],
+                                         "corrections": [{"i": 2, "from": "ไม่ตรง", "to": "อย่างอื่น"}]}, 22)
+    rep = apply_edits.report_markdown("x", res)
+    assert "สวัสดีครับ | ยินดีที่ได้รู้จัก" in rep                                      # real text of both cues
+    assert "ยินดีที่ได้รู้จัก" in rep.split("ไม่ตรง")[0] or "ยินดีที่ได้รู้จัก" in rep   # and of the mismatching correction
+    assert ":  →" not in rep
+
+
 def test_resplit_never_gives_the_last_piece_a_negative_duration():
     # the words sit far later than the cue's own span (the cue end was clamped earlier), so the break lands after the end
     cue = {"t": "กขคง", "f": 0, "to": 300,
@@ -703,6 +778,8 @@ def test_run_on_thai_path_with_spaces(tmp_path, fake_asr, capsys):
     kit.save_config({"tools": {"ffmpeg": FFMPEG}, "glossary": {"prompt_hint": "คำเฉพาะของฉัน"}})
 
     assert cli.main([str(video), "-o", str(out), "--karaoke"]) == 0
+    last = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()][-1]
+    assert last.startswith("ต่อไป:") and "review.md" in last                       # the line a background run is waited on
     for name in ("audio.wav", "asr.json", "raw.cues.json", "raw.srt", "review.md", "raw.karaoke.ass"):
         assert (out / name).exists(), name
     with wave.open(str(out / "audio.wav")) as w:
@@ -874,6 +951,95 @@ def test_patch_command_splices_and_rebuilds(tmp_path, monkeypatch):
     assert "ท่อนใหม่" in (d / "review.md").read_text(encoding="utf-8")
 
 
+# ── pauses (silent boundaries for patch) ──────────────────────────────────────────────────
+
+def _write_wav(path, segs, rate=16000):
+    """segs = [(seconds, amplitude)]: a 300 Hz tone of that amplitude (0 = digital silence)."""
+    import math
+    frames = []
+    for secs, amp in segs:
+        n = int(secs * rate)
+        frames += [int(amp * math.sin(2 * math.pi * 300 * k / rate)) for k in range(n)]
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(b"".join(int(x).to_bytes(2, "little", signed=True) for x in frames))
+
+
+def test_find_pauses_reports_silences_of_at_least_min_ms(tmp_path):
+    wav = tmp_path / "ไฟล์ เสียง.wav"
+    _write_wav(wav, [(1.0, 12000), (0.40, 0), (1.0, 12000), (0.10, 0), (1.0, 12000), (0.20, 0), (0.5, 12000)])
+    pauses = apply_edits.find_pauses(wav)
+    assert len(pauses) == 2                                          # the 100 ms gap is below 150 ms
+    (a1, b1), (a2, b2) = pauses
+    assert (a1, b1) == pytest.approx((1000, 1400), abs=40)
+    assert (a2, b2) == pytest.approx((3500, 3700), abs=40)
+    assert len(apply_edits.find_pauses(wav, min_ms=90)) == 3
+
+
+def test_find_pauses_works_over_a_noisy_floor(tmp_path):
+    wav = tmp_path / "noisy.wav"
+    # "silence" is a faint hum at about -44 dBFS, speech is loud: the threshold follows the floor
+    _write_wav(wav, [(1.0, 12000), (0.5, 300), (1.0, 12000), (0.5, 300), (1.0, 12000)])
+    pauses = apply_edits.find_pauses(wav)
+    assert len(pauses) == 2
+    assert pauses[0][0] == pytest.approx(1000, abs=40) and pauses[1][1] == pytest.approx(3000, abs=40)
+
+
+def test_find_pauses_on_unreadable_audio_is_empty(tmp_path):
+    assert apply_edits.find_pauses(tmp_path / "missing.wav") == []
+
+
+def test_snap_window_moves_outward_to_the_nearest_pause_middle():
+    pauses = [(5000, 5400), (10000, 10500)]
+    start, end, notes = apply_edits.snap_window(pauses, 5.9, 9.7)
+    assert (start, end) == (5.2, 10.25)                              # start goes back, end goes forward: never narrower
+    assert len(notes) == 2 and "5.9" in notes[0] and "5.2" in notes[0]
+    assert apply_edits.snap_window(pauses, 5.2, 10.25)[:2] == (5.2, 10.25)           # already inside a pause: untouched
+    s2, e2, n2 = apply_edits.snap_window(pauses, 5.1, None)
+    assert (s2, e2) == (5.1, None) and n2 == []
+    s3, e3, n3 = apply_edits.snap_window([(1000, 1300)], 9.0, 12.0)                  # nothing within reach: keep, say so
+    assert (s3, e3) == (9.0, 12.0) and len(n3) == 2 and all("ไม่พบ" in n for n in n3)
+
+
+def test_pauses_command_lists_nearby_silences(tmp_path, capsys):
+    d = make_work(tmp_path)
+    _write_wav(d / "audio.wav", [(5.0, 12000), (0.4, 0), (4.6, 12000), (0.5, 0), (4.5, 12000)])
+    assert cli.main(["pauses", str(d), "--around", "5.9", "--within", "6"]) == 0
+    out = capsys.readouterr().out
+    assert "5.00-5.40" in out and "10.00-10.50" in out
+    assert "กลาง 5.20" in out or "5.20" in out
+    capsys.readouterr()
+    assert cli.main(["pauses", str(d), "--around", "5.9", "--within", "1"]) == 0
+    assert "10.00-10.50" not in capsys.readouterr().out               # outside the window
+
+
+def test_pauses_command_without_audio_is_a_thai_error(tmp_path, capsys):
+    (tmp_path / "x").mkdir()
+    assert cli.main(["pauses", str(tmp_path / "x")]) == 2
+    assert "audio.wav" in capsys.readouterr().err
+
+
+@needs_ffmpeg
+def test_patch_snaps_its_window_to_silence(tmp_path, monkeypatch, capsys):
+    d = make_work(tmp_path)
+    _write_wav(d / "audio.wav", [(5.0, 12000), (0.4, 0), (4.6, 12000), (0.5, 0), (4.5, 12000)])
+    seen = []
+
+    def fake(wav, prompt=None):
+        with wave.open(str(wav)) as w:
+            seen.append(w.getnframes() / w.getframerate())
+        return {"transcription": [{"offsets": {"from": 0, "to": 900}, "text": "ใหม่",
+                                   "tokens": [{"text": "ใหม่", "offsets": {"from": 0, "to": 900}}]}]}
+
+    monkeypatch.setattr(cli, "_transcribe", fake)
+    assert cli.main(["patch", str(d), "--from", "5.9", "--to", "9.7"]) == 0
+    assert seen[-1] == pytest.approx(10.25 - 5.2, abs=0.06)           # 5.9 went back to 5.2, 9.7 went forward to 10.25
+    out = capsys.readouterr().out
+    assert "5.9" in out and "5.2" in out and "10.25" in out
+    assert cli.main(["patch", str(d), "--from", "5.9", "--to", "9.7", "--no-snap"]) == 0
+    assert seen[-1] == pytest.approx(3.8, abs=0.06)                   # exact values when asked
+
+
 # ── burn ───────────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("path,expected", [
@@ -976,6 +1142,29 @@ def test_every_skill_bash_block_starts_with_the_shared_preamble():
         assert lines[0].strip() == PREAMBLE, b
         if "$W" in "\n".join(lines[1:]):                            # a snippet that needs the work folder fills it in on line 2
             assert lines[1].lstrip().startswith('W="<'), b
+
+
+def test_skill_says_how_to_run_the_slow_commands():
+    """run / patch / burn can exceed the Bash tool's default timeout, so each one is introduced with the instruction."""
+    text = _skill_text()
+    slow = ('-m engine.subs "$V"', "-m engine.subs patch", "-m engine.subs burn", "thv.mjs")
+    seen = set()
+    for m in re.finditer(r"```bash\n(.*?)```", text, re.S):
+        hit = next((k for k in slow if k in m.group(1)), None)
+        if hit:
+            before = text[max(0, m.start() - 700):m.start()]
+            assert "run_in_background" in before, hit            # said right before the command
+            assert "600000" in before or "thv" in hit or "ระบบแจ้งเอง" in before, hit
+            seen.add(hit)
+    assert seen == set(slow)
+
+
+def test_skill_documents_pauses_snapping_and_the_combined_edit():
+    text = _skill_text()
+    assert '-m engine.subs pauses "$W/subs" --around' in text
+    assert "--no-snap" in text and "ไม่ตัดกลางคำ" in text
+    assert "ห้ามเดาจากเวลา cue" in text
+    assert "แก้คำและย้ายรอยตัด" in text and "คำที่แก้แล้ว" in text
 
 
 def test_skill_commands_use_the_preamble_variables_not_bare_tools():
