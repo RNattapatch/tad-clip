@@ -119,6 +119,21 @@ def test_swiftc_shim_without_command_line_tools_is_a_thai_error(monkeypatch, tmp
         cutout.vision_bin()
 
 
+def test_an_older_vision_build_keeps_cutting_video_when_the_compiler_is_gone(monkeypatch, tmp_path, capsys):
+    """After a kit update the swift source is newer than the cached build; a Mac without the compiler keeps the old
+    build for video (warning), but a still photo needs the new build (older builds cannot read photos)."""
+    monkeypatch.setattr(cutout, "IS_MAC", True)
+    monkeypatch.setattr(cutout.kit, "cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(cutout, "swiftc_path", lambda: None)
+    old = tmp_path / "vision-matte"
+    old.write_text("old build")
+    os.utime(old, (1, 1))
+    assert cutout.vision_bin() == old
+    assert "xcode-select --install" in capsys.readouterr().err
+    with pytest.raises(kit.KitError, match="xcode-select --install"):
+        cutout.vision_bin(still=True)
+
+
 @mac_only
 def test_vision_binary_builds_from_scratch_through_xcrun(tmp_path, monkeypatch):
     monkeypatch.setattr(cutout.kit, "cache_dir", lambda: tmp_path)
@@ -294,7 +309,7 @@ def _fake_vision(tmp_path, monkeypatch, box=(40, 50, 80, 190)):
                     f"x0, y0, x1, y1 = {box}\n"
                     "sys.stdout.buffer.write(bytes(255 if x0 <= x < x1 and y0 <= y < y1 else 0 for y in range(h) for x in range(w)))\n")
     fake.chmod(0o755)
-    monkeypatch.setattr(cutout, "vision_bin", lambda: fake)
+    monkeypatch.setattr(cutout, "vision_bin", lambda **kw: fake)
 
 
 def test_png_output_is_for_stills_only():
