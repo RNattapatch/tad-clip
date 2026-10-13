@@ -1,7 +1,7 @@
 """Cut the speaker out of a clip → transparent video for compose, CapCut or DaVinci.
 
     python -m engine.cutout <clip> <out.mov|out.webm> [vision|tb] [--force]
-    python -m engine.cutout <photo.png|jpg|webp> <out.png> [vision|tb] [--force]   (still photo → PNG, cropped to the person)
+    python -m engine.cutout <photo.png|jpg|webp|heic> <out.png> [vision|tb] [--force]   (still photo → PNG, cropped to the person)
 
 Engines (config.cutout.engine — "auto" = vision on macOS, tb elsewhere when installed, else off):
   vision  Apple Vision person segmentation, accurate quality · ~2 s per 1 s of 720p · no install beyond
@@ -31,7 +31,7 @@ from engine.kit import IS_MAC, IS_WINDOWS, KitError
 HERE = Path(__file__).resolve().parent
 SWIFT_SRC = HERE / "vision-matte.swift"
 ENGINES = ("vision", "tb")
-STILL_EXT = (".png", ".jpg", ".jpeg", ".webp")
+STILL_EXT = (".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif")   # .heic = iPhone camera default (Mac only, via sips)
 STILL_MARGIN = 0.02   # transparent margin kept around the person in a still cut-out (fraction of the cropped size)
 HDR_TRANSFERS = ("smpte2084", "arib-std-b67")   # PQ · HLG (iPhone HDR video)
 # output is limited-range BT.709 and tagged so (editors and thv compose then read the colours the same way)
@@ -281,7 +281,15 @@ def cutout_still(src, out, engine: str) -> dict:
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="tadclip-cutout-") as td:
         work = Path(td)
-        with Image.open(src) as im:
+        if src.suffix.lower() in (".heic", ".heif"):   # Pillow cannot read HEIC · macOS sips can (keeps the EXIF rotation tag)
+            if not IS_MAC:
+                raise KitError(f"อ่านรูป HEIC ({src.name}) ได้เฉพาะบน Mac — แปลงเป็น .jpg ก่อน (เปิดรูปแล้วบันทึกเป็น JPG) แล้วรันใหม่")
+            heic = work / "heic.png"
+            kit.run(["sips", "-s", "format", "png", str(src), "--out", str(heic)])
+            src_img = heic
+        else:
+            src_img = src
+        with Image.open(src_img) as im:
             rgb = ImageOps.exif_transpose(im).convert("RGB")   # phone photos are stored sideways + an EXIF rotation tag
         plain = work / "src.png"
         rgb.save(plain)
@@ -343,7 +351,7 @@ def main(argv=None) -> int:
             pass
     ap = argparse.ArgumentParser(prog="python -m engine.cutout",
                                  description="ตัดพื้นหลังคนในคลิป → .mov (ProRes 4444) หรือ .webm (VP9) พื้นใส · รูปนิ่ง → .png พื้นใส")
-    ap.add_argument("clip", help="คลิป หรือรูปนิ่ง (.png .jpg .webp)")
+    ap.add_argument("clip", help="คลิป หรือรูปนิ่ง (.png .jpg .webp · .heic บน Mac)")
     ap.add_argument("out", help=".mov หรือ .webm (คลิป) · .png (รูปนิ่ง)")
     ap.add_argument("engine", nargs="?", default=None, help="vision | tb (ไม่ใส่ = ตาม config.cutout.engine)")
     ap.add_argument("--force", action="store_true", help="ทำใหม่แม้มีไฟล์ปลายทางแล้ว")
