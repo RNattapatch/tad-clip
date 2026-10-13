@@ -490,8 +490,11 @@ test('mode: no value = cutaway (old plans) · unknown mode is an error · overla
     assert.notEqual(ctx.plan.look, 'stage', f);
     assert.ok(ctx.plan.shots.every(s => s.layout !== 'cutout' || s.sub_y == null), `${f}: cutaway must not move subtitles`);
   }
-  thv.load(join(ROOT, 'tests', 'smoke', 'plan.json'));
-  assert.deepEqual(thv.check().errs, [], 'smoke plan');
+  // the smoke plan has a cutout shot → pin the engine so the result does not depend on the machine (Windows CI has no tb)
+  withHome({ cutout: { engine: 'tb' } }, () => {
+    thv.load(join(ROOT, 'tests', 'smoke', 'plan.json'));
+    assert.deepEqual(thv.check().errs, [], 'smoke plan');
+  });
   const dir = workDir();
   thv.load(writePlan(dir, { title: 't', mode: 'theatre', proof_exempt: 'x', shots: [{ id: '01', t: [0, 2], layout: 'split', visual: { panel: 'primary' } }] }));
   assert.ok(thv.check().errs.some(e => /mode "theatre"/.test(e)));
