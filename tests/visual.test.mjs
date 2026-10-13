@@ -541,6 +541,17 @@ test('a pose shot needs no cut-out engine (Windows without transparent-backgroun
   assert.ok(thv.check().errs.some(e => /shot 01: layout cutout/.test(e)), 'a live cut-out still needs an engine');
 }));
 
+test('a pose needs a backdrop file: none = error · an AI image not made yet = warning', () => {
+  const dir = stageDir(), pose = { file: 'ภาพ ฉาก/ท่า ชี้.png', h: 1250, y: 640 };
+  thv.load(writePlan(dir, stagePlan({ prompts: { scene: { prompt: 'office, photo', style: 'photo' } } }, [
+    { id: '01', t: [0, 1.5], layout: 'cutout', visual: { ai: 'scene', pose } },
+    { id: '02', t: [1.5, 3], layout: 'cutout', visual: { card: { type: 'grid', big: '3', source: 'x' }, pose } }])));
+  const r = thv.check();
+  assert.ok(r.warns.some(w => /shot 01: visual\.pose ต้องมีภาพฉากหลัง/.test(w)), r.warns.join('\n'));
+  assert.ok(r.errs.some(e => /shot 02: visual\.pose ต้องมีภาพฉากหลัง/.test(e)), r.errs.join('\n'));
+  assert.ok(!r.errs.some(e => /shot 01/.test(e)), 'an AI image can still be made after check');
+});
+
 test('grid card: every variant checks · bad fields are errors · a number without source warns', () => {
   const dir = stageDir();
   const grid = (id, t, card) => ({ id, t, layout: 'full-card', visual: { card: { type: 'grid', ...card } } });
