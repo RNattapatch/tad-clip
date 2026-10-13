@@ -569,6 +569,14 @@ test('grid card: every variant checks · bad fields are errors · a number witho
   const b = thv.check(), errs = b.errs.join('\n');
   for (const want of [/shot 01: grid ต้องมี images/, /shot 02: grid theme "blue"/, /shot 02: grid image ไม่เจอไฟล์/, /shot 02: grid at\[\] ต้องมี 1 ค่า/, /shot 03: grid badge ต้องมี big/]) assert.match(errs, want);
   assert.ok(b.warns.some(w => /shot 03: grid มีตัวเลข \(big\) แต่ไม่มี source/.test(w)));
+  thv.load(writePlan(dir, stagePlan({}, [
+    grid('01', [0, 1.5], { big: '3', source: 'x', badge: { big: 'ทั้งวัน' } }),
+    grid('02', [1.5, 3], { images: ['ภาพ ฉาก/แชต.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg', 'ภาพ ฉาก/แชต.jpg'], at: [1.2, 0.6] }),
+    grid('03', [3, 4.5], { images: ['ภาพ ฉาก/แชต.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg'], at: [2] })]), 'quiet.json'));
+  const q = thv.check().warns.join('\n');
+  assert.match(q, /shot 01: grid badge วางบนมุมภาพ/);
+  assert.match(q, /shot 02: grid at\[\] ต้องเรียง/);
+  assert.match(q, /shot 03: grid at\[\] ต้องเรียง/);
 });
 
 test('stage pacing: opening hold >2 s · average >2.5 s per picture (carousel photos count) · no floor', () => {
