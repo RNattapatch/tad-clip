@@ -1,0 +1,69 @@
+{
+  "title": "ตัวอย่าง mode stage — ผู้พูดยืนบนเวทีเดียว ฉากหลังเปลี่ยน",
+  "source_script": "(ตัวอย่างของ skill · ภาพทั้งหมดเป็นภาพกราฟิกวาดด้วยโค้ด ดู stage-demo/CREDITS.md · ใส่ source_video + subs ของคุณเองก่อน compose · รูปนิ่ง pose เป็นเงาคนตัวแทน ให้เปลี่ยนเป็นรูปตัวเองที่ตัดพื้นแล้ว)",
+  "mode": "stage",
+  "fps": 30,
+  "out": "out-stage",
+  "stage_floor": "stage-demo/bg/floor.png",
+  "whip": { "dur": 0.12, "sigma": 60 },
+  "proof_exempt": "ตัวอย่างหน้าตาของ mode stage — ไม่มีเรื่องจริงให้โชว์",
+  "shots": [
+    {
+      "id": "01", "t": [0, 1.6], "layout": "split",
+      "say": "ร้านเดิม ลูกค้าเดิม ยอดเท่าเดิมทุกเดือน",
+      "visual": { "image": "stage-demo/bg/shop.jpg" },
+      "overlays": [
+        { "type": "label", "text": "ยอดขาย *ไม่ขยับ* มา 6 เดือน", "x": 50, "y": 40 },
+        { "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }
+      ]
+    },
+    {
+      "id": "02", "t": [1.6, 3.2], "layout": "cutout",
+      "say": "เจ้าของเลยลองเปลี่ยนวิธีหาลูกค้า",
+      "visual": { "image": "stage-demo/bg/office.jpg" },
+      "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
+    },
+    {
+      "id": "03", "t": [3.2, 4.4], "layout": "cutout",
+      "say": "แล้วผมก็ถามคำถามเดียว",
+      "visual": { "image": "stage-demo/bg/city.jpg", "pose": { "file": "stage-demo/pose/figure-point.png", "h": 1250, "y": 640 } },
+      "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
+    },
+    {
+      "id": "04", "t": [4.4, 6.0], "layout": "full-card",
+      "say": "ทีมขายใช้เวลาไปกับอะไรทั้งวัน",
+      "visual": { "card": { "type": "grid", "theme": "light", "images": ["stage-demo/cards/chat.jpg"], "badge": { "big": "ทั้งวัน", "small": "ตอบแชต", "at": 0.5 }, "source": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" } }
+    },
+    {
+      "id": "05", "t": [6.0, 8.2], "layout": "full-card",
+      "say": "ตอบแชต จดออเดอร์ นัดส่งของ",
+      "visual": { "card": { "type": "grid", "theme": "dark", "images": ["stage-demo/cards/chat.jpg", "stage-demo/cards/calendar.jpg", "stage-demo/cards/boxes.jpg"], "at": [0.7, 1.4], "source": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" } }
+    },
+    {
+      "id": "06", "t": [8.2, 9.8], "layout": "cutout",
+      "say": "งานซ้ำพวกนี้ย้ายไปให้ระบบทำ",
+      "visual": { "image": "stage-demo/bg/warehouse.jpg" },
+      "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
+    },
+    {
+      "id": "07", "t": [9.8, 11.4], "layout": "full-card",
+      "say": "เซลล์มีเวลาไปหาลูกค้าใหม่เพิ่มขึ้นเยอะ",
+      "visual": { "card": { "type": "grid", "theme": "dark", "big": "3 เท่า", "caption": "เวลาที่ได้คุยลูกค้าใหม่", "source": "ตัวอย่าง — แทนด้วยตัวเลขจริงและที่มาของคุณ" } }
+    },
+    {
+      "id": "08", "t": [11.4, 12.6], "layout": "cutout",
+      "say": "แล้วยอดก็เริ่มขยับ",
+      "visual": { "image": "stage-demo/bg/office.jpg", "pose": { "file": "stage-demo/pose/figure-stand.png", "h": 1250, "y": 640 } },
+      "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
+    },
+    {
+      "id": "09", "t": [12.6, 14.4], "layout": "full-card",
+      "say": "ลองดูว่าทีมคุณเสียเวลาไปกับอะไร",
+      "visual": { "card": { "type": "grid", "theme": "light", "images": ["stage-demo/cards/chart.jpg"], "lines": ["ทีมคุณเสียเวลา", "ไปกับอะไร?"], "accent": 1, "source": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" } }
+    },
+    {
+      "id": "10", "t": [14.4, 16.0], "layout": "full-speaker", "whip": false,
+      "say": "เล่าในคอมเมนต์ได้เลยครับ"
+    }
+  ]
+}
