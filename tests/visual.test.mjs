@@ -468,3 +468,159 @@ test('2-shot plan (full-card + overlay) renders onto the fixture: 1080x1920, no 
   let diff = 0; for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
   assert.ok(diff / a.length > 2, `subtitle band unchanged (${(diff / a.length).toFixed(2)})`);
 });
+
+// ---------------------------------------------------------------- modes: cutaway (default) · stage
+const STAGE_DEMO = join(EXAMPLES, 'stage-demo');
+// a stage work folder: copies of the example graphics under plain + Thai names
+function stageDir() {
+  const dir = workDir(); mkdirSync(join(dir, 'ภาพ ฉาก'), { recursive: true });
+  for (const [from, to] of [['bg/office.jpg', 'ภาพ ฉาก/ออฟฟิศ.jpg'], ['bg/floor.png', 'ภาพ ฉาก/พื้น.png'], ['cards/chat.jpg', 'ภาพ ฉาก/แชต.jpg'],
+    ['cards/calendar.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg'], ['pose/figure-point.png', 'ภาพ ฉาก/ท่า ชี้.png']]) writeFileSync(join(dir, to), readFileSync(join(STAGE_DEMO, from)));
+  return dir;
+}
+const stagePlan = (over = {}, shots) => ({ title: 'stage', mode: 'stage', fps: 30, stage_floor: 'ภาพ ฉาก/พื้น.png', proof_exempt: 'test', ...over, shots: shots || [
+  { id: '01', t: [0, 1.5], layout: 'cutout', say: 'a', visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg', pose: { file: 'ภาพ ฉาก/ท่า ชี้.png', h: 1250, y: 640 } }, overlays: [{ type: 'hook-pill', text: 'x', y: 30 }] },
+  { id: '02', t: [1.5, 3.5], layout: 'full-card', say: 'b', visual: { card: { type: 'grid', theme: 'dark', images: ['ภาพ ฉาก/แชต.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg'], at: [0.8], badge: { big: 'ทั้งวัน', at: 0.3 } } } },
+  { id: '03', t: [3.5, 4.5], layout: 'full-speaker', say: 'c', whip: false }] });
+
+test('mode: no value = cutaway (old plans) · unknown mode is an error · overlay-on-cut still loads', () => {
+  for (const f of ['lead-leak.plan.json', 'vox-star-sales-leaves.plan.json']) {
+    const ctx = thv.load(join(EXAMPLES, f));
+    assert.equal(ctx.mode, 'cutaway', f);
+    assert.notEqual(ctx.plan.look, 'stage', f);
+    assert.ok(ctx.plan.shots.every(s => s.layout !== 'cutout' || s.sub_y == null), `${f}: cutaway must not move subtitles`);
+  }
+  thv.load(join(ROOT, 'tests', 'smoke', 'plan.json'));
+  assert.deepEqual(thv.check().errs, [], 'smoke plan');
+  const dir = workDir();
+  thv.load(writePlan(dir, { title: 't', mode: 'theatre', proof_exempt: 'x', shots: [{ id: '01', t: [0, 2], layout: 'split', visual: { panel: 'primary' } }] }));
+  assert.ok(thv.check().errs.some(e => /mode "theatre"/.test(e)));
+  const oc = thv.load(writePlan(dir, { title: 't', mode: 'overlay-on-cut', shots: [{ id: '01', t: [0, 20], layout: 'full-speaker' }] }, 'oc.json'));
+  assert.equal(oc.mode, 'overlay-on-cut');
+  assert.deepEqual(thv.check().errs, []);
+});
+
+test('stage: look, cut-out scale and subtitle height defaults · explicit values win', () => {
+  const dir = stageDir();
+  const ctx = thv.load(writePlan(dir, stagePlan({ look: 'vox' }, [
+    { id: '01', t: [0, 1.5], layout: 'cutout', visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg' } },
+    { id: '02', t: [1.5, 3], layout: 'cutout', sub_y: 60, visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg' } },
+    { id: '03', t: [3, 4], layout: 'full-speaker' }])));
+  assert.equal(ctx.plan.look, 'stage');
+  assert.equal(ctx.plan.cutout.scale, thv.STAGE.cutout_scale);
+  assert.deepEqual(ctx.plan.shots.map(s => s.sub_y), [44, 60, undefined]);
+  assert.ok(thv.check().warns.some(w => /look "vox"/.test(w)), 'a look the stage overrides is reported');
+  const own = thv.load(writePlan(dir, stagePlan({ cutout: { scale: 0.6 }, stage_sub_y: 40 }, [{ id: '01', t: [0, 1.5], layout: 'cutout', visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg' } }]), 'own.json'));
+  assert.equal(own.plan.cutout.scale, 0.6);
+  assert.equal(own.plan.shots[0].sub_y, 40);
+  const legacy = thv.load(writePlan(dir, { ...stagePlan(), mode: undefined, look: 'stage' }, 'look.json'));
+  assert.equal(legacy.mode, 'stage', 'look "stage" without mode = stage');
+});
+
+test('stage plan passes check · missing image / floor / pose files are errors · pose only on cutout', () => {
+  const dir = stageDir();
+  thv.load(writePlan(dir, stagePlan()));
+  const ok = thv.check();
+  assert.deepEqual(ok.errs, [], ok.errs.join('\n'));
+  const bad = stagePlan({ stage_floor: 'ภาพ ฉาก/ไม่มีพื้น.png' });
+  bad.shots[0].visual = { image: 'ไม่มีฉาก.jpg', pose: { file: 'ไม่มีท่า.png' } };
+  bad.shots[2].visual = { pose: { file: 'ภาพ ฉาก/ท่า ชี้.png' } };
+  thv.load(writePlan(dir, bad, 'bad.json'));
+  const errs = thv.check().errs.join('\n');
+  for (const want of [/stage_floor ไม่เจอไฟล์/, /visual\.image ไม่เจอไฟล์/, /visual\.pose\.file ไม่เจอ/, /shot 03: visual\.pose ใช้กับ layout cutout เท่านั้น/]) assert.match(errs, want);
+  const cli = node(['check', join(dir, 'bad.json')]);
+  assert.equal(cli.status, 1);
+});
+
+test('a pose shot needs no cut-out engine (Windows without transparent-background)', () => withHome({ cutout: { engine: 'off' } }, () => {
+  const dir = stageDir();
+  thv.load(writePlan(dir, stagePlan()));
+  assert.deepEqual(thv.check().errs, []);
+  const live = stagePlan(); delete live.shots[0].visual.pose;
+  thv.load(writePlan(dir, live, 'live.json'));
+  assert.ok(thv.check().errs.some(e => /shot 01: layout cutout/.test(e)), 'a live cut-out still needs an engine');
+}));
+
+test('grid card: every variant checks · bad fields are errors · a number without source warns', () => {
+  const dir = stageDir();
+  const grid = (id, t, card) => ({ id, t, layout: 'full-card', visual: { card: { type: 'grid', ...card } } });
+  thv.load(writePlan(dir, stagePlan({}, [
+    grid('01', [0, 1.5], { theme: 'light', images: ['ภาพ ฉาก/แชต.jpg'], badge: { big: 'ทั้งวัน', small: 'ตอบแชต' }, source: 'ภาพจำลอง · x' }),
+    grid('02', [1.5, 3.5], { theme: 'dark', images: ['ภาพ ฉาก/แชต.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg'], at: [0.8] }),
+    grid('03', [3.5, 5], { theme: 'dark', big: '3 เท่า', caption: 'เวลาคุยลูกค้าใหม่', source: 'บันทึกทีม 2026' }),
+    grid('04', [5, 6.5], { images: ['ภาพ ฉาก/ปฏิทิน.jpg'], lines: ['ทีมเสียเวลา', 'ไปกับอะไร?'], accent: 1 })])));
+  const r = thv.check();
+  assert.deepEqual(r.errs, [], r.errs.join('\n'));
+  thv.load(writePlan(dir, stagePlan({}, [
+    grid('01', [0, 1.5], {}),
+    grid('02', [1.5, 3], { theme: 'blue', images: ['ภาพ ฉาก/ไม่มี.jpg', 'ภาพ ฉาก/แชต.jpg'], at: [0.5, 1] }),
+    grid('03', [3, 4.5], { big: '7 หลัก', badge: { small: 'x' } })]), 'bad.json'));
+  const b = thv.check(), errs = b.errs.join('\n');
+  for (const want of [/shot 01: grid ต้องมี images/, /shot 02: grid theme "blue"/, /shot 02: grid image ไม่เจอไฟล์/, /shot 02: grid at\[\] ต้องมี 1 ค่า/, /shot 03: grid badge ต้องมี big/]) assert.match(errs, want);
+  assert.ok(b.warns.some(w => /shot 03: grid มีตัวเลข \(big\) แต่ไม่มี source/.test(w)));
+});
+
+test('stage pacing: opening hold >2 s · average >2.5 s per picture (carousel photos count) · no floor', () => {
+  const dir = stageDir();
+  const cut = (id, t) => ({ id, t, layout: 'cutout', visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg' } });
+  thv.load(writePlan(dir, stagePlan({ stage_floor: undefined }, [cut('01', [0, 2.6]), cut('02', [2.6, 5.4]), cut('03', [5.4, 8.4])])));
+  const w = thv.check().warns.join('\n');
+  assert.match(w, /shot 01: ช่วงเปิด 12 วิแรก ภาพค้าง 2\.6 วิ \(เกิน 2 วิ\)/);
+  assert.match(w, /mode stage: เฉลี่ย 2\.80 วิต่อภาพ/);
+  assert.match(w, /ไม่มี plan\.stage_floor/);
+  // the same 8.4 s with a 3-photo carousel = 5 pictures → 1.68 s each, no pacing warning
+  const shots = [cut('01', [0, 1.8]), { id: '02', t: [1.8, 6.6], layout: 'full-card', visual: { card: { type: 'grid', images: ['ภาพ ฉาก/แชต.jpg', 'ภาพ ฉาก/ปฏิทิน.jpg', 'ภาพ ฉาก/แชต.jpg'], at: [1.6, 3.2] } } }, cut('03', [6.6, 8.4])];
+  assert.equal(thv.stageStates(shots), 5);
+  thv.load(writePlan(dir, stagePlan({}, shots), 'fast.json'));
+  assert.ok(!thv.check().warns.some(x => /เฉลี่ย/.test(x)));
+  // cutaway keeps its own 3 s opening rule
+  thv.load(writePlan(dir, { title: 't', proof_exempt: 'x', shots: [{ id: '01', t: [0, 2.6], layout: 'split', visual: { image: 'ภาพ ฉาก/ออฟฟิศ.jpg' } }] }, 'cutaway.json'));
+  assert.ok(!thv.check().warns.some(x => /ภาพค้าง/.test(x)));
+});
+
+test('whip filtergraph: gblur on every cut except whip:false · sigma scales with the output · none without plan.whip', () => {
+  const shots = [{ t: [0, 1.5] }, { t: [1.5, 3] }, { t: [3, 4], whip: false }, { t: [4, 5] }];
+  const f = thv.whipFilter(shots, { dur: 0.12, sigma: 60 });
+  assert.equal(f, "gblur=sigma=60:sigmaV=0.01:steps=2:enable='between(t,1.440,1.560)+between(t,3.940,4.060)'");
+  assert.match(thv.whipFilter(shots, {}, 4 / 3), /^gblur=sigma=80:/, 'defaults + 2K scale');
+  assert.equal(thv.whipFilter(shots, undefined), null);
+  assert.equal(thv.whipFilter([{ t: [0, 1] }, { t: [1, 2], whip: false }], {}), null);
+  const dir = workDir();
+  thv.load(writePlan(dir, { title: 't', proof_exempt: 'x', whip: { dur: 0 }, shots: [{ id: '01', t: [0, 2], layout: 'split', visual: { panel: 'primary' } }] }));
+  assert.ok(thv.check().errs.some(e => /plan\.whip/.test(e)));
+  const r = spawnSync(kit.tool('ffmpeg'), ['-hide_banner', '-filters'], { encoding: 'utf8' });
+  assert.match(r.stdout, / gblur /, 'this ffmpeg has gblur');
+});
+
+test('stage renders: storyboard + grid/pose PNGs, then compose on the fixture with pose, carousel and whip', async t => {
+  const dir = stageDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const plan = writePlan(dir, stagePlan({ source_video: relative(dir, FIXTURE) }));
+  const all = node(['all', plan]);
+  assert.equal(all.status, 0, all.stdout + all.stderr);
+  for (const f of ['storyboard.png', 'shots/01-cutout.png', 'shots/02-full-card.png']) assert.ok(existsSync(join(dir, 'out', f)), f);
+  // pose PNG: the silhouette stands at x 50 % on the stage, the floor plate covers the bottom of the backdrop
+  const pose = rgbMean(join(dir, 'out', 'shots', '01-cutout.png'), 0, [520, 1000, 40, 40]);
+  assert.ok(pose.every(c => c < 90), `pose silhouette not drawn: ${pose.map(Math.round)}`);
+  // carousel: after the slide (t 0.8 + 0.22 s) the second photo sits where the first was
+  const card = join(dir, 'out', 'shots', '02-full-card.png');
+  assert.ok(rgbMean(card, 0, [400, 300, 60, 60]).some(c => c > 150), 'grid photo missing');
+
+  const motion = node(['motion', plan]);
+  assert.equal(motion.status, 0, motion.stdout + motion.stderr);
+  const compose = node(['compose', plan]);
+  assert.equal(compose.status, 0, compose.stdout + compose.stderr);
+  assert.match(compose.stdout, /รูปนิ่ง 1 ช็อต/);
+  assert.match(compose.stdout, /whip 1 รอยต่อ/);
+  const out = join(dir, 'out', 'preview-composite.mp4');
+  const info = ffprobeJson(out), v = info.streams.find(s => s.codec_type === 'video');
+  assert.equal(v.width, 1080); assert.equal(v.height, 1920); assert.equal(v.color_range, 'tv');
+  assert.ok(Math.abs(+info.format.duration - 4.5) < 0.15, info.format.duration);
+  for (const at of [0.7, 2.5, 4]) assert.ok(yavg(out, at) > 16, `black frame at ${at}s`);
+  assert.ok(rgbMean(out, 0.7, [520, 1000, 40, 40]).every(c => c < 100), 'pose shot shows the still, not the live speaker');
+  // whip: the frame on the cut (1.5 s) is blurred sideways → much less horizontal detail than the same card a moment later
+  const detail = at => { const r = spawnSync(kit.tool('ffmpeg'), ['-v', 'error', '-ss', String(at), '-i', out, '-frames:v', '1', '-vf', 'crop=1080:700:0:200,format=gray,convolution=0 0 0 -1 0 1 0 0 0:0 0 0 -1 0 1 0 0 0:0 0 0 -1 0 1 0 0 0:0 0 0 -1 0 1 0 0 0,signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG:file=-', '-f', 'null', '-'], { encoding: 'utf8' });
+    const m = r.stdout.match(/YAVG=([\d.]+)/); assert.ok(m, r.stderr); return +m[1]; };
+  const onCut = detail(1.52), after = detail(2.2);
+  assert.ok(onCut < after * 0.6, `no whip blur on the cut: edge energy ${onCut.toFixed(2)} vs ${after.toFixed(2)}`);
+});
