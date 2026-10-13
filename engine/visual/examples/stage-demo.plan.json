@@ -26,7 +26,7 @@
     {
       "id": "03", "t": [3.2, 4.4], "layout": "cutout",
       "say": "แล้วผมก็ถามคำถามเดียว",
-      "visual": { "image": "stage-demo/bg/city.jpg", "pose": { "file": "stage-demo/pose/figure-point.png", "h": 1250, "y": 640 } },
+      "visual": { "image": "stage-demo/bg/city.jpg", "pose": { "file": "stage-demo/pose/figure-point.png", "h": 1000, "y": 900 } },
       "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
     },
     {
@@ -53,7 +53,7 @@
     {
       "id": "08", "t": [11.4, 12.6], "layout": "cutout",
       "say": "แล้วยอดก็เริ่มขยับ",
-      "visual": { "image": "stage-demo/bg/office.jpg", "pose": { "file": "stage-demo/pose/figure-stand.png", "h": 1250, "y": 640 } },
+      "visual": { "image": "stage-demo/bg/office.jpg", "pose": { "file": "stage-demo/pose/figure-stand.png", "h": 1000, "y": 900 } },
       "overlays": [{ "type": "source", "text": "ภาพจำลอง · ภาพกราฟิกวาดด้วยโค้ด" }]
     },
     {
