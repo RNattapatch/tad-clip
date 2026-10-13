@@ -1,12 +1,23 @@
 ---
 name: tad-clip-visual
-description: ใส่ภาพประกอบให้คลิปพูดหน้ากล้องภาษาไทย — ผู้พูดเป็นหมุดคนเดิม ส่วนโลกด้านหลังเปลี่ยนตามเรื่องทุกบีต (split screen ภาพครึ่งบน/คนครึ่งล่าง · ภาพจริง/คลิปจริง · การ์ดข้อความไทย · ผังโผล่ทีละขั้น · กราฟ · มีมตรงประโยคตบมุก · ตัดพื้นหลังคนวางบนภาพ · look แบบ Vox explainer) ออกเป็น storyboard ให้ดูก่อน แล้วเรนเดอร์ในเครื่องฟรีเป็น MP4 พร้อมซับ หรือไฟล์แยกไปวางเองใน CapCut. Use when the user says "ใส่ภาพประกอบ", "ทำ visual ให้คลิปนี้", "ทำภาพประกอบคลิป", "motion graphic", "ทำ storyboard", "การ์ดข้อความ", "แบบ Vox", "สไตล์ Vox explainer", "split screen", "แบ่งจอ", "ตัดพื้นหลัง", "ตัดพื้นหลังคน", "ใส่มีม", "หาภาพจริงมาใส่", or wants a talking-head clip that is not visually static (English: "add visuals / b-roll / cards to my talking-head video", "Vox style", "remove background"). Not for cutting retakes (use tad-clip) or subtitles only (use tad-clip-subs).
+description: ใส่ภาพประกอบให้คลิปพูดหน้ากล้องภาษาไทย — ผู้พูดเป็นหมุดคนเดิม ส่วนโลกด้านหลังเปลี่ยนตามเรื่องทุกบีต (split screen ภาพครึ่งบน/คนครึ่งล่าง · ภาพจริง/คลิปจริง · การ์ดข้อความไทย · ผังโผล่ทีละขั้น · กราฟ · มีมตรงประโยคตบมุก · ตัดพื้นหลังคนวางบนภาพ · look แบบ Vox explainer · 2 mode: cutaway ตัดไปภาพแล้วกลับมาที่คน / stage คนยืนบนเวทีเดียว ฉากหลังเปลี่ยนทุก 1–2 วิ) ออกเป็น storyboard ให้ดูก่อน แล้วเรนเดอร์ในเครื่องฟรีเป็น MP4 พร้อมซับ หรือไฟล์แยกไปวางเองใน CapCut. Use when the user says "ใส่ภาพประกอบ", "ทำ visual ให้คลิปนี้", "ทำภาพประกอบคลิป", "motion graphic", "ทำ storyboard", "การ์ดข้อความ", "แบบ Vox", "สไตล์ Vox explainer", "split screen", "แบ่งจอ", "ตัดพื้นหลัง", "ตัดพื้นหลังคน", "ใส่มีม", "หาภาพจริงมาใส่", "แทรกภาพ", "cutaway", "stage", "ยืนบนฉาก", "ยืนบนเวที", "ฉากหลังเปลี่ยนเรื่อยๆ", "เปลี่ยนฉากหลังทุกประโยค", or wants a talking-head clip that is not visually static (English: "add visuals / b-roll / cards to my talking-head video", "Vox style", "remove background", "stage mode", "cutaway mode"). Not for cutting retakes (use tad-clip) or subtitles only (use tad-clip-subs).
 argument-hint: [คลิปที่ตัดแล้ว หรือ plan.json] [--slug ชื่อ]
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion
 ---
 
 คุณคือ **visual director** ของคลิปพูดหน้ากล้อง 1 คลิป · ผู้พูดเป็นหมุด — มุมกล้องเดิม เสียงต่อเนื่อง ซับตำแหน่งเดิม
 งานคุณคือตัดสินว่า **โลกด้านหลังโชว์อะไรในทุกบีต** แล้วทำทุกอย่างที่ทำในเครื่องได้ให้ครบ (การ์ด · motion · ประกอบลงคลิปจริง · ซับ) ฟรีทั้งหมด
+
+## เลือก mode ก่อนทุกครั้ง
+
+| mode | หน้าตา | เหมาะกับ | เรียกเมื่อผู้ใช้พูดว่า |
+|---|---|---|---|
+| **`cutaway`** (ค่าเริ่มต้น) | ผู้พูดพูดหน้ากล้องเป็นหมุด · ตัดไปภาพจริง/คลิปจริง/stock/มีม/การ์ด แล้วกลับมาที่ผู้พูด (split · full-card · full-speaker · proof · look ปกติหรือ vox) | คลิปทั่วไป · เล่าเรื่องคน/แบรนด์จริง · อธิบายกลไก | "แทรกภาพ" · "cutaway" · "แบบปกติ" · ไม่ได้บอก |
+| **`stage`** | ผู้พูดตัดพื้นยืนบนพื้นเวทีเดียวกันทุกฉาก · ฉากหลังภาพสมจริงเปลี่ยนทุก 1–2 วิ · การ์ดภาพบนกระดาษกราฟ · ตัวเลขใหญ่เป็นระยะ · เบลอทุกรอยต่อ · สลับรูปนิ่งของผู้พูดในจังหวะอารมณ์เปลี่ยน | เล่าเคสที่มีหลายฉาก/หลายตัวละคร/ตัวเลขให้ไต่ | "stage" · "ยืนบนฉาก" · "ยืนบนเวที" · "ฉากหลังเปลี่ยนเรื่อยๆ" |
+
+- ผู้ใช้ไม่ได้ระบุ (และไม่ได้มาจาก skill tad-clip ที่ถามไปแล้ว) → ใช้ `cutaway` แล้วบอกบรรทัดเดียว: "ใช้แบบ cutaway (ตัดไปภาพแล้วกลับมาที่คุณ) · อยากให้ยืนบนเวทีฉากหลังเปลี่ยน บอกว่า stage" — ไม่ต้องถาม
+- `plan.mode: "stage"` → อ่าน `${CLAUDE_PLUGIN_ROOT}/engine/visual/references/stage-style.md` เพิ่ม แล้วทำหัวข้อ **Mode stage** ท้ายไฟล์นี้ก่อน Step 2 · `cutaway` ไม่ต้องใส่ `mode` (plan เก่าทุกไฟล์ = cutaway)
+- คู่มือฝั่งผู้ใช้: `docs/09-modes.md`
 
 ## ทุกคำสั่ง Bash เริ่มด้วย 2 บรรทัดนี้ (เครื่องมือ Bash ลืมตัวแปรระหว่างคำสั่ง)
 
@@ -21,7 +32,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 - ทุก path **ใน** `plan.json` (คลิป · ซับ · ภาพ · ฟุตเทจ) เทียบกับโฟลเดอร์ของ plan (เขียนแบบ relative ได้)
 - ไวยากรณ์ภาพ (layout · การ์ด · จังหวะ · เลือกภาพตามชนิดข้อมูล) → **Read `${CLAUDE_PLUGIN_ROOT}/engine/visual/references/visual-modes.md` ทุกครั้ง** (ถ้า `${CLAUDE_PLUGIN_ROOT}` ไม่ถูกแทนค่า ให้ใช้ `~/.tad-clip/kit`)
 - look `vox` (explainer แบบ Vox: คำถามเดียว · เอกสาร/กราฟ/timeline วาดตัวเอง · การ์ดอก · ที่มาบนจอบังคับ) → Read `${CLAUDE_PLUGIN_ROOT}/engine/visual/references/vox-style.md` เพิ่ม · ใช้เมื่อผู้ใช้ขอ Vox/explainer หรือหัวข้อเป็น "ทำไม/ยังไง X ถึงเกิด" ที่มีหลักฐานจริงให้โชว์
-- ตัวอย่าง plan: `${CLAUDE_PLUGIN_ROOT}/engine/visual/examples/lead-leak.plan.json` (look ปกติ) · `vox-star-sales-leaves.plan.json` (look vox)
+- ตัวอย่าง plan: `${CLAUDE_PLUGIN_ROOT}/engine/visual/examples/lead-leak.plan.json` (look ปกติ) · `vox-star-sales-leaves.plan.json` (look vox) · `stage-demo.plan.json` (mode stage)
 
 ```
 คลิปที่ตัดแล้ว + ซับ .karaoke.ass ─► ดูเฟรม (วัดตำแหน่งหน้า) ─► plan.json ─► thv check ─► thv all ─► storyboard.png ─► ผู้ใช้ผ่าน
@@ -37,7 +48,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 - **คลิป** = `roughcut.mp4` (ตัดเทคซ้ำแล้ว) หรือคลิปที่ผู้ใช้ตัดมาเอง → `plan.source_video`
 - **ซับ** = `subs/<ชื่อ>.karaoke.ass` จาก skill **tad-clip-subs** (`python -m engine.subs finalize`) → `plan.subs` · ได้ `subs/cues.json` (เวลาจริงของแต่ละบรรทัดซับ) มาด้วย = ใช้ตั้ง `t` ของช็อต · ยังไม่มีซับ → ทำซับก่อน (เวลาช็อตต้องตรงคำพูด)
 - **ยังไม่ได้ถ่าย** (มีแค่บท) → ทำ plan จากบทได้ ตั้ง `t` ประมาณ **~16 ตัวอักษรพูด/วิ** แล้ว `thv animatic` ให้ดูจังหวะ · ถ่ายเสร็จค่อยแก้ `t` ตามซับจริง · skill นี้ไม่เขียนบทเอง
-- **ถามวัตถุดิบ** (ข้ามถ้ามาจาก skill tad-clip ที่ถามไปแล้ว) — AskUserQuestion 2 ข้อ:
+- **ถามวัตถุดิบ** (ข้ามถ้ามาจาก skill tad-clip ที่ถามไปแล้ว) — AskUserQuestion 2 ข้อ (mode `stage` ถามเพิ่มตามหัวข้อ Mode stage):
   1. เอาอะไรบ้าง (เลือกหลายข้อ): ภาพจริง/หลักฐาน · คลิปจริง · มีม · การ์ดข้อความ/กราฟิก · ตัดพื้นหลังคนวางบนภาพ
   2. เอามาจากไหน: ให้ Claude หาจากเน็ต · ส่งไฟล์เอง (บอกโฟลเดอร์) · ผสม
 - หาจากเน็ต/มีม/เสียง → กติกาเต็มอยู่ใน skill **tad-clip-library** (ไลเซนส์ฟรีก่อน → หน้าทางการพร้อมเครดิต → คลิป ≤1080p · **เสนอรายการก่อนโหลด** เว้นแต่ผู้ใช้สั่ง "หาให้เลยไม่ต้องถาม") · ทุกชิ้นลง `CREDITS.md` ด้วย `"$PY" -m engine.fetch credit --file "$W/CREDITS.md" …` พร้อมช่อง **ใช้ยิงแอดได้ไหม**
@@ -86,7 +97,7 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 "$NODE" engine/visual/thv.mjs all   "$W/plan.json"     # storyboard.png · shots/*.png · edit-sheet.md · prompts.md
 ```
 - `check` มี ❌ = ห้ามไปต่อ · ⚠️ = แก้ หรือบอกผู้ใช้ว่าทำไมยอมให้ผ่าน
-- ตัวตรวจจับ: ไฟล์ `proof_file`/`footage`/รูป overlay ไม่เจอ (ช็อตจะออกจอดำ) · ช็อตค้างเกิน 3 วิในช่วงเปิด (vox 4) · ไม่มีการ์ดรีเซ็ตเกิน 18 วิ · ข้อความซ้อน >2 ชั้น · ผู้พูดเต็มจอเปล่าเกิน 6 วิ · ข้อความในโซนปุ่มของแอป (y <12% หรือ >72%) · การ์ดอกทับหน้า · chart/stat/doc/quote ไม่มี source (vox = error) · source ยังเป็น "ตัวอย่าง" · ภาพ AI หลายสไตล์ · ไทยใน prompt · `cutout` บนเครื่องที่ไม่มีตัวตัดพื้น (error → เปลี่ยนเป็น `split`) · **overlay ทับกันเอง หรือทับแถบซับ** (warning — ประมาณจากชนิด/ตำแหน่ง/ความยาวข้อความ ต้องดูภาพยืนยัน)
+- ตัวตรวจจับ: ไฟล์ `proof_file`/`footage`/รูป overlay ไม่เจอ (ช็อตจะออกจอดำ) · ช็อตค้างเกิน 3 วิในช่วงเปิด (vox 4 · stage 2) · stage เฉลี่ยเกิน 2.5 วิต่อภาพ · ไม่มีพื้นเวที · ไม่มีการ์ดรีเซ็ตเกิน 18 วิ · ข้อความซ้อน >2 ชั้น · ผู้พูดเต็มจอเปล่าเกิน 6 วิ · ข้อความในโซนปุ่มของแอป (y <12% หรือ >72%) · การ์ดอกทับหน้า · chart/stat/doc/quote ไม่มี source (vox = error) · source ยังเป็น "ตัวอย่าง" · ภาพ AI หลายสไตล์ · ไทยใน prompt · `cutout` บนเครื่องที่ไม่มีตัวตัดพื้น (error → เปลี่ยนเป็น `split`) · **overlay ทับกันเอง หรือทับแถบซับ** (warning — ประมาณจากชนิด/ตำแหน่ง/ความยาวข้อความ ต้องดูภาพยืนยัน)
 - storyboard ใช้**เฟรมจริงของผู้พูด**ตรงกลางแต่ละช็อต (วางตามที่ compose จะวาง: ครึ่งล่างของ split ตาม `split_window` · หน้าบนการ์ดตาม `face_circle` · ตัว cutout ย่อชิดล่าง) และวาด**บรรทัดซับตรงตำแหน่งที่จะ burn จริง** — ต้องมี `source_video` (+ `subs`) ใน plan ก่อน ไม่งั้นเป็นภาพตัวแทนสีเทา · ช็อตที่ไม่มีกราฟิก (ผู้พูดเต็มจอเปล่า) ไม่มี PNG ใน `shots/` — log บอกว่าช็อตไหน
 - **Read `out/storyboard.png` เองก่อน** (ไทยตัดกลางคำ · การ์ดล้น · ภาพผิดช็อต · ซับทับหน้า/ทับป้าย) · thumbnail เล็ก → **Read `out/shots/<id>-*.png` เพิ่มทุกช็อตที่มี `highlight` / `annotate` / `chat` / ที่ check เตือนว่าทับกัน** (แถบไฮไลต์ต้องทับบรรทัดเดียวพอดี) · แล้วส่ง path ให้ผู้ใช้ดู พร้อมสรุปสั้นว่าแต่ละช่วงโชว์อะไร · **รอผู้ใช้ผ่านก่อนเรนเดอร์** — แก้แผนตอนนี้ถูกที่สุด
 
@@ -225,7 +236,13 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 | `face_circle` · shot `face` | หน้าผู้พูดบนการ์ดเต็มจอ (ดู Step 1) · `false` = ปิดรายช็อต |
 | `cutout` · shot `cutout_engine` / `cutout_scale` | `{engine, scale}` ตัดพื้นหลังคน |
 | `mirror` | ช่วงที่ภาพกลับซ้ายขวา `[[from, to]]` |
-| `mode: "overlay-on-cut"` · `proof_exempt` · `people` | ทับ edit เดิม · เหตุผลที่ไม่มีของจริง · คนในภาพ AI เป็นใคร |
+| `mode` | `cutaway` (ไม่ใส่ = ค่านี้) · `stage` · `overlay-on-cut` (ทับ edit เดิม) |
+| `proof_exempt` · `people` | เหตุผลที่ไม่มีของจริง · คนในภาพ AI เป็นใคร |
+| visual `image` | path ภาพ png/jpg/webp เทียบ plan · ใช้ได้ทุก layout ทุก mode (ไม่ต้องย้ายเข้า assets/) |
+| `stage_floor` · `floor_top` · visual `stage: false` | mode stage: ภาพพื้นเวที · ขอบบนพื้น (px) · ปิดพื้นรายช็อต |
+| visual `pose` | mode stage: `{file, h, y, x?}` รูปนิ่งพื้นใสของผู้พูดแทนตัวสดในช็อต cutout |
+| `whip` · shot `whip: false` | `{dur, sigma}` เบลอแนวนอนคร่อมทุกรอยต่อตอน compose · ตัดตรงเข้าช็อตนั้น |
+| `cutout.fade_side` · `stage_sub_y` | จางขอบข้างตัวที่ตัดพื้น (0–0.5) · ตำแหน่งซับค่าเริ่มของช็อตเวที (44) |
 | shot `beat` | look vox: cold-open · question · context · mechanism · turn · proof · so-what |
 
 **ใช้ได้ทุก look (ไม่ใช่แค่ vox)** — ตำแหน่งเป็น % ของเฟรม 1080×1920 · รายละเอียดเต็มใน `visual-modes.md` §2
@@ -253,3 +270,33 @@ W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> 
 - `highlight` ต้องมีภาพจริงข้างใต้ (`proof_file`) ไม่งั้นไฟล์พื้นเขียวได้แค่ขีดเส้นใต้ทึบ
 - การ์ด/overlay ชนิดใหม่ = เพิ่ม type ใน `engine/visual/cards.html` + รายชื่อใน `thv.mjs` (`FULL_CARDS`/`OVERLAYS`) + ตาราง §2 ใน `visual-modes.md`
 - plan รุ่นก่อน kit (layout ชื่อเดิมของ `full-speaker` · สี `navy` / `coral` / `gold`) อ่านได้ — แปลงเป็น `full-speaker` / `primary` / `accent` / `accent2` ให้เอง
+- mode stage + คลิปครึ่งตัว (ถ่ายใกล้ ถือไมค์) → ตัดพื้นแล้วดูเหมือนยืนหลังเคาน์เตอร์ ไม่ใช่เต็มตัวบนเวที · บอกผู้ใช้ก่อนเริ่ม · อยากได้เต็มตัวต้องถ่ายใหม่ห่างกล้อง ~3 ม.
+- `visual.pose` เป็นรูปนิ่ง ปากไม่ขยับ → ใช้ช็อตละ 1–1.5 วิ ในจังหวะอารมณ์เปลี่ยนเท่านั้น
+
+---
+
+## Mode stage
+
+ผู้พูดตัดพื้นยืนบนพื้นเวทีแผ่นเดียว ฉากหลังเปลี่ยนทุก 1–2 วิ · สเปกเต็ม (จังหวะ · ช็อต 4 แบบ · ฟิลด์ · การ์ด grid) อยู่ใน `stage-style.md` · ตัวอย่าง `stage-demo.plan.json`
+
+**ถามวัตถุดิบ** (AskUserQuestion ครั้งเดียว · ข้ามข้อที่ผู้ใช้ตอบมาแล้ว):
+1. **รูปตัวเองสำหรับสลับท่า** — "มีรูปเต็มตัว/ครึ่งตัว 2–4 ท่า (บอกโฟลเดอร์)" / "ไม่มี ใช้ตัวสดจากคลิปอย่างเดียว"
+2. **รูปทำงานจริง** (ร้าน · ทีม · สินค้า · หน้างาน) — "มี (บอกโฟลเดอร์)" / "ไม่มี"
+3. **ฉากหลังที่ไม่มีรูปจริง** — "ให้ Claude หา stock ฟรีให้ (Pexels · Pixabay · Commons)" / "ทำบล็อก prompt ให้ผมไปทำภาพเอง" / "ผสม"
+
+แล้ว:
+- บอกข้อจำกัดบรรทัดเดียวถ้าคลิปเป็นครึ่งตัว (ดู Gotchas) · เครื่องไม่มีตัวตัดพื้น (`check` ฟ้อง cutout) → ช็อตเวทีใช้ `visual.pose` ทุกช็อต หรือกลับไปใช้ cutaway
+- รูปทำงานจริง → ฉากหลัง `visual.image` / การ์ด `grid` · ฉากที่ไม่มีรูป → skill **tad-clip-library** (stock ฟรี + `CREDITS.md`) หรือ `visual.ai` + `thv prompts` · ภาพจำลองทุกชิ้นติดป้าย `ภาพจำลอง · …`
+- พื้นเวที `plan.stage_floor` = ภาพพื้น 1 ภาพ (คอนกรีต · ไม้ · ยางมะตอย จากรูปตัวเองหรือ stock ฟรี) · ห้ามสลับพื้นระหว่างคลิป
+- รูปท่าของผู้ใช้ → ตัดพื้นเป็น PNG พื้นใส (ครอปพอดีตัวให้เอง) แล้วใส่ใน `visual.pose`:
+  ```bash
+  K="${CLAUDE_PLUGIN_ROOT}"; [ -f "$K/engine/env.sh" ] || K="$HOME/.tad-clip/kit"; . "$K/engine/env.sh"
+  W="<path เต็มของโฟลเดอร์งาน tad-clip-<slug> — ใส่ค่าจริงทุกครั้ง>"
+  # งานนาน (vision ไม่กี่วิต่อรูป · tb ~30 วิต่อรูป ครั้งแรกโหลดโมเดล) → Bash run_in_background: true (หรือ timeout 600000) · จบแล้วขึ้น "✓ <ไฟล์>" = สำเร็จ · "❌ …" = ล้มเหลว
+  mkdir -p "$W/assets/pose" && "$PY" -m engine.cutout "<path เต็มของรูปท่า.jpg>" "$W/assets/pose/<ชื่อท่า>.png"
+  ```
+  Read PNG ที่ได้ดูเองทุกรูป (ขอบผม · นิ้ว · ของในมือ) · ตั้ง `h` / `y` ให้หัวระดับเดียวกับตัวสดในช็อตข้างๆ (เทียบใน storyboard)
+- เบลอรอยต่อเปิดให้เองใน stage (`plan.whip` ค่าเริ่ม `{ "dur": 0.12, "sigma": 60 }` · `"whip": false` = ปิดทั้งคลิป) · ช็อตปิด/CTA ใส่ `"whip": false` ที่ช็อตนั้น
+- ตัวตรวจของ stage: ภาพค้างช่วงเปิด ≤2 วิ · เฉลี่ย >2.5 วิต่อภาพ = เตือน (carousel นับทีละใบ) · ไม่มี `stage_floor` = เตือน · `grid` มี `big` ไม่มี `source` = เตือน · ไฟล์ภาพ/pose/พื้นหาไม่เจอ = error
+- เรนเดอร์ตาม Step 3–5 เหมือนเดิม (compose ใส่เบลอรอยต่อให้เอง · ช็อต pose ไม่ต้องตัดพื้นตัวสด)
+- ผู้ใช้สั่งเปลี่ยน mode หลังมี plan แล้ว → เขียนไฟล์ใหม่ `plan-stage.json` (`"out": "out-stage"`) หรือ `plan-cutaway.json` (`"out": "out-cutaway"`) · plan เดิมเก็บไว้ ห้ามเขียนทับ

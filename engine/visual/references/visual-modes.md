@@ -1,18 +1,29 @@
 # Visual modes — ไวยากรณ์ภาพของคลิปพูดหน้ากล้อง
 
-> อ่านทุกครั้งก่อนเขียน `plan.json` · look `vox` (explainer แบบ Vox · โครง 7 beat · การ์ดเอกสาร/กราฟ/timeline · การ์ดอก) → อ่าน `vox-style.md` เพิ่ม
-> ตัวอย่างเต็ม: `../examples/lead-leak.plan.json` (12 ช็อต · 39 วิ · look ปกติ) · `../examples/vox-star-sales-leaves.plan.json` (9 ช็อต · 37 วิ · look vox)
+> อ่านทุกครั้งก่อนเขียน `plan.json` · look `vox` (explainer แบบ Vox · โครง 7 beat · การ์ดเอกสาร/กราฟ/timeline · การ์ดอก) → อ่าน `vox-style.md` เพิ่ม · mode `stage` → อ่าน `stage-style.md` เพิ่ม
+> ตัวอย่างเต็ม: `../examples/lead-leak.plan.json` (12 ช็อต · 39 วิ · look ปกติ) · `../examples/vox-star-sales-leaves.plan.json` (9 ช็อต · 37 วิ · look vox) · `../examples/stage-demo.plan.json` (10 ช็อต · 16 วิ · mode stage)
 
 **หลักเดียว:** ผู้พูดเป็นหมุด (คนเดิม มุมเดิม เสียงต่อเนื่อง ซับตำแหน่งเดิม) · **โลกด้านหลังเปลี่ยนตามสิ่งที่กำลังอธิบาย**
 
 ---
+
+## 0. Mode 2 แบบ (ค่า `mode` ใน plan.json · ไม่ใส่ = `cutaway`)
+
+| mode | หน้าตา | layout ที่ใช้มาก | จังหวะ | อ่านเพิ่ม |
+|---|---|---|---|---|
+| `cutaway` (ค่าเริ่มต้น) | ผู้พูดพูดหน้ากล้อง ตัดไปของจริง/คลิปจริง/stock/มีม/การ์ด แล้วกลับมาที่ผู้พูด · look ปกติหรือ `vox` | `split` · `full-card` · `full-speaker` · `proof` | ภาพค้างช่วงเปิด ≤3 วิ (vox 4) | §1–4 ไฟล์นี้ · `vox-style.md` ถ้า look vox |
+| `stage` | ผู้พูดตัดพื้นยืนบนพื้นเวทีแผ่นเดียวกันทุกฉาก ฉากหลังภาพสมจริงเปลี่ยนทุก 1–2 วิ + การ์ดภาพบนกระดาษกราฟ + ตัวเลขใหญ่ + เบลอทุกรอยต่อ + สลับรูปนิ่งของผู้พูดในจังหวะอารมณ์เปลี่ยน | `cutout` · `full-card` (grid) · `split` | ภาพค้างช่วงเปิด ≤2 วิ · เฉลี่ย ≤2.5 วิต่อภาพ | `stage-style.md` |
+
+- `mode: "overlay-on-cut"` (ทับคลิปที่ตัดเสร็จแล้ว) ยังใช้ได้เหมือนเดิม
+- plan ที่เขียนก่อนมี mode (ไม่มีค่า `mode`) = `cutaway` ทำงานเหมือนเดิมทุกอย่าง
+- `stage` ต้องตัดพื้นหลังผู้พูดได้ (Mac = vision · Windows = tb) **หรือ** ใช้รูปนิ่งที่ตัดพื้นแล้ว (`visual.pose`) ทุกช็อตเวที
 
 ## 1. Layout 5 แบบ (ค่า `layout` ใน plan.json)
 
 | layout | จอ 1080×1920 | ผู้พูดอยู่ไหน | ใช้เมื่อ | ต้องมี |
 |---|---|---|---|---|
 | `split` | บน 0–960 = ภาพ · ล่าง 960–1920 = ผู้พูด | ครึ่งล่าง (ถ่ายปกติ ไม่ต้องตัดพื้น) | **Hook 0–3 วิ** · ช็อตที่ต้องเห็นหลักฐานกับหน้าผู้พูดพร้อมกัน · มีม · **ฟองแชต** (`visual.panel: primary\|paper` = พื้นเรียบครึ่งบน) | `visual.proof_file` / `footage` / `ai` / `card` / `panel` |
-| `cutout` | ภาพเต็มจอ + ผู้พูดตัดพื้นยืนล่างกลาง ~62% | ล่าง 25–40% | ยิงตัวอย่างรัว (evidence stack) · ฉากสะสมเหตุ→ผล | `visual.proof_file` / `ai` + เครื่องที่มีตัวตัดพื้น (Mac = vision · Windows = tb ถ้าติดตั้ง) |
+| `cutout` | ภาพเต็มจอ + ผู้พูดตัดพื้นยืนล่างกลาง ~62% (mode stage 72%) | ล่าง 25–40% | ยิงตัวอย่างรัว (evidence stack) · ฉากสะสมเหตุ→ผล · ช็อตเวทีของ mode stage | `visual.image` / `proof_file` / `ai` + เครื่องที่มีตัวตัดพื้น (Mac = vision · Windows = tb ถ้าติดตั้ง) หรือ `visual.pose` |
 | `full-card` | การ์ดเต็มจอ (ผู้พูดหายจากภาพ เสียงเดินต่อ) | — หรือหน้าลอยบนการ์ดถ้าเปิด `face_circle` | รีเซ็ตสายตา · ประกาศ "มี N ข้อ" · ผังกลไก · CTA | `visual.card` |
 | `full-speaker` | ผู้พูดเต็มจอ | ทั้งจอ | พักสายตาสั้นๆ · ประโยคที่ต้องเห็นหน้า/อารมณ์ · การ์ดอก (look vox) | overlays (ไม่บังคับ) |
 | `proof` | ของจริงเต็มจอ (ภาพหน้าจอระบบ · แชต · ใบเสนอราคา · รูปหน้างาน · คลิปจริง) | — | ปิดท้ายด้วยหลักฐาน · **ห้ามใช้ภาพ AI แทน** | `visual.proof` (+ `proof_file` หรือ `footage`) |
@@ -33,6 +44,7 @@
 | `stat` | `value` · `caption` · `source` | ตัวเลขใหญ่ — **ตัวเลขจริงเท่านั้น** ห้ามแต่ง |
 | `cta` | `big[]` · `small` | ตัวใหญ่ + บรรทัดเล็ก |
 | `doc` `chart` `timeline` `quote` `chapter` | ดู `vox-style.md` §3 | ใช้ได้ทั้งสอง look |
+| `grid` | `theme: light\|dark` · `images[]` · `at[]` · `badge{big,small,at}` · `lines[]` + `accent` · `big` + `caption` · `source` | การ์ดภาพมุมมนบนกระดาษกราฟ · หลายภาพ = carousel ปัดซ้าย · ตัวเลขต้องมี `source` — รายละเอียด `stage-style.md` §3 (ใช้ได้ทุก mode) |
 
 **ซ้อนบนภาพ (`overlays[]`)** — ตำแหน่งเป็น % ของเฟรม
 | type | ฟิลด์ | หน้าที่ (ห้ามสลับ) |
@@ -48,6 +60,7 @@
 | `keyword` | `lines[]` (≤3) · `y` = กึ่งกลาง (56) | การ์ดอก — กล่องสีเน้นต่อบรรทัด · ไม่ทับหน้า |
 | `name` · `docchip` | `name` `role` `y` (ขอบบน 52) · `text` `meta` `y` (กึ่งกลาง 56) | ป้ายชื่อ · เอกสารแผ่นเล็ก (รายละเอียดใน `vox-style.md` §3) |
 
+**ภาพจากไฟล์ `visual.image`** (ทุก layout · ทุก mode): path ภาพ png/jpg/webp เทียบโฟลเดอร์ plan → เต็มช่องภาพของ layout (ครึ่งบนของ split · ทั้งจอของ cutout/proof) · ไม่ต้องย้ายเข้า `assets/ai` หรือ `assets/proof` · หาไฟล์ไม่เจอ = error
 **การจัดภาพ `visual.treat`** (ทุก look · ใช้กับ `proof_file` หรือภาพ AI): `print` = รูปพิมพ์ขอบขาวเอียงวางบนกระดาษ · `duotone` = ขาวดำย้อมสี `primary`/`paper`
 **พิกัด:** ทุกค่าเป็น % ของเฟรม 1080×1920 · ชิ้นที่วางกลาง (`hook-pill` `label` `keyword` `docchip` `highlight` `annotate` `image`) ใช้ `x`,`y` เป็นจุดกึ่งกลาง · `source` `name` `chat` ใช้ `y` เป็นขอบบน
 

@@ -1,7 +1,7 @@
 {
   "name": "tad-clip",
   "displayName": "ตัดคลิป by pun_nattapatch",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "ตัดคลิปพูดหน้ากล้องภาษาไทยด้วย Claude — ตัดเทคซ้ำ ซับคาราโอเกะ แทรกภาพ/คลิป/มีม/เสียง จบเป็น MP4 ฟรี ไม่ใช้ API ไม่มีค่ารายเดือนเพิ่มจากค่า Claude",
   "author": {
     "name": "ปัน ณัฐพัชร์ (@pun_nattapatch)",
