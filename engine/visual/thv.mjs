@@ -19,7 +19,11 @@ const W = 1080, H = 1920;
 export const LAYOUTS = ['split', 'cutout', 'full-card', 'full-speaker', 'proof'];
 const LAYOUT_ALIAS = { ['full-' + 'p' + 'un']: 'full-speaker' };   // plans written before the kit used the author's name for this layout
 const TONE_ALIAS = { navy: 'primary', coral: 'accent', gold: 'accent2' };
-export const FULL_CARDS = ['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline'];
+export const FULL_CARDS = ['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline', 'grid'];
+// plan.mode: cutaway (default · the speaker is the anchor, cut away to real material and back) · stage (the speaker cut out on one
+// shared stage floor, photo backdrops change every 1–2 s · references/stage-style.md) · overlay-on-cut (text layer on a finished edit)
+export const MODES = ['cutaway', 'stage', 'overlay-on-cut'];
+export const STAGE = { hold: 2, avg: 2.5, cutout_scale: 0.72, sub_y: 44, whip: { dur: 0.12, sigma: 60 } };   // stage defaults + pacing targets
 export const OVERLAYS = ['image', 'hook-pill', 'label', 'counter', 'chat', 'annotate', 'highlight', 'source', 'keyword', 'name', 'docchip'];
 export const BEATS = ['cold-open', 'question', 'context', 'mechanism', 'turn', 'proof', 'so-what'];   // look vox · references/vox-style.md §1
 // output presets (config.output.preset · plan.preset): every number in a plan stays in 1080×1920 design space
@@ -115,6 +119,17 @@ export function load(planFile, args = []) {
   ARGS = args; cfg = loadConfig(); probeCache.clear();
   PLAN_PATH = resolve(planFile); PLAN_DIR = dirname(PLAN_PATH);
   plan = JSON.parse(readFileSync(PLAN_PATH, 'utf8'));
+  // mode: no value = cutaway (every plan written before modes existed) · stage owns its look
+  if (plan.look === 'stage' && !plan.mode) plan.mode = 'stage';
+  plan.mode ??= 'cutaway';
+  if (plan.mode === 'stage') {
+    plan._look_was = plan.look && plan.look !== 'stage' ? plan.look : undefined;
+    plan.look = 'stage';
+    plan.cutout = { scale: STAGE.cutout_scale, ...(plan.cutout || {}) };
+    if (plan.whip === undefined) plan.whip = { ...STAGE.whip };   // the blur across cuts is part of the style · "whip": false = hard cuts
+    // the speaker is scaled down and stands at the bottom → the usual subtitle band lands on the face: lift it above the head
+    (plan.shots || []).forEach(s => { if (s.layout === 'cutout' && s.sub_y == null) s.sub_y = plan.stage_sub_y ?? STAGE.sub_y; });
+  }
   const tone = v => TONE_ALIAS[v] || v;
   (plan.shots || []).forEach(s => {   // legacy names → kit names (same slots)
     if (LAYOUT_ALIAS[s.layout]) s.layout = LAYOUT_ALIAS[s.layout];
@@ -138,7 +153,7 @@ export function load(planFile, args = []) {
   STEP = plan.look === 'vox' ? (plan.graphics_fps ?? (FPS % 12 === 0 ? 12 : FPS / Math.max(1, Math.round(FPS / 12.5)))) : 0;
   SPEAKER = (cfg.speaker && cfg.speaker.name) || 'ผู้พูด';
   ENGINE = machineEngine(cfg);
-  return { plan, planDir: PLAN_DIR, out: OUT, preset: PRESET, fps: FPS, graphicsFps: STEP, renderScale: K, cardScale: CARD_SCALE, speaker: SPEAKER, cutoutEngine: ENGINE };
+  return { plan, mode: plan.mode, planDir: PLAN_DIR, out: OUT, preset: PRESET, fps: FPS, graphicsFps: STEP, renderScale: K, cardScale: CARD_SCALE, speaker: SPEAKER, cutoutEngine: ENGINE };
 }
 
 // ---------------------------------------------------------------- subtitles: where the band sits in each shot
@@ -183,11 +198,25 @@ export function overlayBox(o) {
 const overlapY = (a, b) => Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
 const overlapX = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
 
+// stage: visual states = shots, plus one per extra photo of a grid carousel (each slide is a new picture)
+export const stageStates = shots => shots.reduce((n, s) => n + 1 + Math.max(0, ((((s.visual || {}).card || {}).images || []).length) - 1), 0);
+// whip: a horizontal blur `dur` s long centred on every cut (shot.whip: false = hard cut into that shot) → ffmpeg -vf, or null
+// gblur ships in every ffmpeg build (Mac Homebrew · Windows gyan/BtbN) · sigma is in 1080-wide pixels, k scales it to the output
+export function whipFilter(shots, whip, k = 1) {
+  if (!whip) return null;
+  const w = { ...STAGE.whip, ...whip }, cuts = shots.slice(1).filter(s => s.whip !== false).map(s => s.t[0]);
+  if (!cuts.length) return null;
+  const on = cuts.map(t => `between(t,${Math.max(0, t - w.dur / 2).toFixed(3)},${(t + w.dur / 2).toFixed(3)})`).join('+');
+  return `gblur=sigma=${Math.round(w.sigma * k)}:sigmaV=0.01:steps=2:enable='${on}'`;
+}
+
 // ---------------------------------------------------------------- check
 export function check() {
   const errs = [], warns = [], shots = plan.shots || [];
   const ONCUT = plan.mode === 'overlay-on-cut';   // on top of an edit someone already made: pacing/layout belong to that edit, check text only
   if (!shots.length) errs.push('plan.shots ว่าง');
+  if (!MODES.includes(plan.mode)) errs.push(`mode "${plan.mode}" ไม่รู้จัก (${MODES.join(' · ')})`);
+  if (plan._look_was) warns.push(`mode stage ใช้หน้าตาของตัวเอง — look "${plan._look_was}" ถูกข้าม`);
   if (plan.preset && !PRESETS[plan.preset]) errs.push(`preset "${plan.preset}" ไม่รู้จัก (${Object.keys(PRESETS).join(' · ')})`);
   if (plan.source_video && !existsSync(planPath(plan.source_video))) warns.push(`ไม่เจอ source_video "${plan.source_video}" (เทียบกับโฟลเดอร์ของ plan) — compose จะทำไม่ได้`);
   let prevEnd = 0, lastReset = 0;
@@ -202,14 +231,21 @@ export function check() {
     const v = s.visual || {};
     if (v.card && !FULL_CARDS.includes(v.card.type)) errs.push(`${tag}: card.type "${v.card.type}" ไม่รู้จัก (${FULL_CARDS.join(' · ')})`);
     if (v.ai && !prompts[v.ai]) errs.push(`${tag}: visual.ai "${v.ai}" ไม่มีใน plan.prompts`);
+    if (v.image && !existsSync(planPath(v.image))) errs.push(`${tag}: visual.image ไม่เจอไฟล์ (${v.image}) — ช็อตจะออกเป็นจอดำ`);
+    if (v.image && !/\.(png|jpe?g|webp)$/i.test(v.image)) errs.push(`${tag}: visual.image ต้องเป็นไฟล์ภาพ png/jpg/webp (${v.image})`);
+    if (v.pose) {   // a still cut-out photo of the speaker stands on the stage instead of the live clip
+      if (s.layout !== 'cutout') errs.push(`${tag}: visual.pose ใช้กับ layout cutout เท่านั้น`);
+      if (!v.pose.file || !existsSync(planPath(v.pose.file))) errs.push(`${tag}: visual.pose.file ไม่เจอ (${v.pose.file || '-'}) — ทำรูปพื้นใสด้วย python -m engine.cutout <รูป> <ชื่อ>.png`);
+      else if (!/\.png$/i.test(v.pose.file)) warns.push(`${tag}: visual.pose.file ไม่ใช่ .png — รูปที่ยังไม่ตัดพื้นจะเห็นพื้นหลังเดิมเป็นกล่อง`);
+    }
     if (v.footage && !existsSync(planPath(v.footage.file || ''))) errs.push(`${tag}: visual.footage.file ไม่เจอ (${v.footage.file})`);
     if (v.footage && !v.footage.source && !(s.overlays || []).some(o => o.type === 'source')) warns.push(`${tag}: คลิปจริงไม่มีป้ายที่มา (footage.source หรือ overlay source)`);
     (s.overlays || []).forEach(o => { if (o.type === 'image' && !existsSync(planPath(o.file || ''))) errs.push(`${tag}: overlay image ไม่เจอไฟล์ (${o.file})`); });
     (s.overlays || []).forEach(o => { if (!OVERLAYS.includes(o.type)) errs.push(`${tag}: overlay "${o.type}" ไม่รู้จัก (${OVERLAYS.join(' · ')})`); });
     if (s.layout === 'full-card' && !v.card) errs.push(`${tag}: full-card ต้องมี visual.card`);
-    if ((s.layout === 'split' || s.layout === 'cutout') && !v.ai && !v.proof && !v.footage && !v.card && !(s.layout === 'split' && v.panel)) errs.push(`${tag}: ${s.layout} ต้องมีภาพ (visual.ai / visual.proof / visual.footage / visual.card${s.layout === 'split' ? ' / visual.panel' : ''})`);
+    if ((s.layout === 'split' || s.layout === 'cutout') && !v.image && !v.ai && !v.proof && !v.footage && !v.card && !(s.layout === 'split' && v.panel)) errs.push(`${tag}: ${s.layout} ต้องมีภาพ (visual.image / visual.ai / visual.proof / visual.footage / visual.card${s.layout === 'split' ? ' / visual.panel' : ''})`);
     if (s.layout === 'proof' && !v.proof) errs.push(`${tag}: proof ต้องระบุ visual.proof ว่าของจริงคืออะไร`);
-    if (s.layout === 'cutout') {   // the speaker is really cut out of the frame → needs an engine on this machine
+    if (s.layout === 'cutout' && !v.pose) {   // the speaker is really cut out of the frame → needs an engine on this machine
       const e = shotEngine(s);
       if (e === 'off') errs.push(`${tag}: layout cutout ต้องตัดพื้นหลังคน แต่เครื่องนี้ยังไม่มีตัวตัดพื้น (cutout.engine = off) — เปลี่ยนเป็น layout "split" (ภาพครึ่งบน ผู้พูดครึ่งล่าง) หรือติดตั้งตัวตัดพื้นก่อน (Mac ใช้ vision ได้เลย · Windows รัน setup พร้อม --with-cutout)`);
       else if (e === 'vision' && !IS_MAC) errs.push(`${tag}: cutout engine "vision" ใช้ได้เฉพาะ Mac — ใช้ "tb" หรือเปลี่ยนเป็น layout "split"`);
@@ -223,6 +259,14 @@ export function check() {
     if (c.type === 'chart' && c.kind === 'bar' && (c.series || []).length > 1) warns.push(`${tag}: chart bar ใช้ series แรกชุดเดียว`);
     if (c.type === 'quote' && !c.who) errs.push(`${tag}: quote ต้องมี who (ใครพูด — คำพูดจริงเท่านั้น)`);
     if (c.type === 'chapter' && (!c.n || !c.title)) errs.push(`${tag}: chapter ต้องมี n + title`);
+    if (c.type === 'grid') {   // stage card: photos on grid paper · references/stage-style.md §2
+      if (!(c.images || []).length && !(c.lines || []).length && c.big == null) errs.push(`${tag}: grid ต้องมี images[] หรือ lines[] หรือ big`);
+      (c.images || []).forEach(f => { if (!existsSync(planPath(f))) errs.push(`${tag}: grid image ไม่เจอไฟล์ (${f})`); });
+      if (c.theme && !['light', 'dark'].includes(c.theme)) errs.push(`${tag}: grid theme "${c.theme}" ไม่รู้จัก (light · dark)`);
+      if (c.at && (!Array.isArray(c.at) || c.at.length !== Math.max(0, (c.images || []).length - 1))) errs.push(`${tag}: grid at[] ต้องมี ${Math.max(0, (c.images || []).length - 1)} ค่า (วินาทีที่ปัดไปภาพถัดไป · ภาพละ 1 ค่ายกเว้นภาพแรก)`);
+      if (c.big != null && !c.source) warns.push(`${tag}: grid มีตัวเลข (big) แต่ไม่มี source — ตัวเลขบนจอต้องบอกที่มา`);
+      if (c.badge && !c.badge.big) errs.push(`${tag}: grid badge ต้องมี big`);
+    }
     if (c.type === 'timeline' && !(c.events || []).length) errs.push(`${tag}: timeline ต้องมี events[{t, text}]`);
     if (['chart', 'doc', 'stat', 'quote'].includes(c.type) && !c.source) (plan.look === 'vox' ? errs : warns).push(`${tag}: ${c.type} ไม่มี source — ตัวเลข/เอกสาร/คำพูดบนจอต้องบอกที่มา (ของจริงเท่านั้น)`);
     if (c.source && /ตัวอย่าง|placeholder|TODO/i.test(c.source)) warns.push(`${tag}: source ยังเป็นค่าตัวอย่าง "${c.source}" — แทนด้วยที่มาจริงก่อนเรนเดอร์ใช้งาน`);
@@ -241,7 +285,7 @@ export function check() {
     });
     if (s.beat && !BEATS.includes(s.beat)) errs.push(`${tag}: beat "${s.beat}" ไม่รู้จัก (${BEATS.join(' · ')})`);
     // pacing rules (references/visual-modes.md §3)
-    const HOLD = plan.look === 'vox' ? 4 : 3;   // vox: measured median shot 3.2–3.4 s — slower, but every shot carries one new piece of information
+    const HOLD = plan.look === 'vox' ? 4 : plan.mode === 'stage' ? STAGE.hold : 3;   // vox: measured median shot 3.2–3.4 s, every shot carries one new piece of information · stage: a new picture every 1–2 s
     if (!ONCUT && s.t[0] < 12 && dur(s) > HOLD + .01 && s.layout !== 'full-card') warns.push(`${tag}: ช่วงเปิด 12 วิแรก ภาพค้าง ${dur(s)} วิ (เกิน ${HOLD} วิ) — ตัดเป็นหลายช็อต`);
     if (s.layout === 'full-card' || s.layout === 'split') lastReset = s.t[1];
     if (!ONCUT && s.t[1] - lastReset > 18) { warns.push(`${tag}: ผ่านไป ${(s.t[1] - lastReset).toFixed(1)} วิ ยังไม่มีการ์ดเต็มจอรีเซ็ตสายตา (เป้า ทุก 12–18 วิ)`); lastReset = s.t[1]; }
@@ -280,6 +324,13 @@ export function check() {
     }
     if (plan.style && !['collage', 'photo'].includes(plan.style)) warns.push(`look vox: style "${plan.style}" ไม่เข้าชุด — ใช้ collage (ค่าแนะนำ) หรือ photo + visual.treat`);
   }
+  if (plan.mode === 'stage' && shots.length && prevEnd > 0) {   // stage pacing — references/stage-style.md §1
+    const avg = prevEnd / stageStates(shots);
+    if (avg > STAGE.avg) warns.push(`mode stage: เฉลี่ย ${avg.toFixed(2)} วิต่อภาพ (เป้า ≤${STAGE.avg}) — ซอยประโยคเป็นหลายฉาก`);
+    if (!plan.stage_floor) warns.push('mode stage: ไม่มี plan.stage_floor — ฉาก cutout จะไม่มีพื้นเวทีร่วม ผู้พูดจะดูย้ายที่ทุกช็อต');
+  }
+  if (plan.stage_floor && !existsSync(planPath(plan.stage_floor))) errs.push(`plan.stage_floor ไม่เจอไฟล์ (${plan.stage_floor})`);
+  if (plan.whip && !(+(plan.whip.dur ?? STAGE.whip.dur) > 0 && +(plan.whip.sigma ?? STAGE.whip.sigma) > 0)) errs.push('plan.whip ต้องเป็น { dur: วินาที > 0, sigma: > 0 }');
   const styles = new Set(Object.values(prompts).map(p => p.style || plan.style));
   if (styles.size > 1) errs.push(`ภาพ AI ใช้ ${styles.size} สไตล์ (${[...styles].join(', ')}) — 1 คลิป 1 ภาษาภาพ`);
   Object.entries(prompts).forEach(([id, p]) => {
@@ -403,8 +454,14 @@ async function openBrowser() {
       await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
       // overlay image: file path (relative to plan) → file URL the page can load
       const imgUrl = o => o.type === 'image' && o.file ? { ...o, src: pathToFileURL(planPath(o.file)).href } : o;
-      const fix = sh => sh && sh.overlays ? { ...sh, overlays: sh.overlays.map(imgUrl) } : sh;
-      job = { ...job, shot: fix(job.shot), shots: job.shots && job.shots.map(fix) };
+      // stage: grid-card photos · the shared stage floor · pose cut-outs are paths relative to the plan → file URLs
+      const url = f => pathToFileURL(planPath(f)).href;
+      const fix = sh => { if (!sh) return sh; const c = sh.visual && sh.visual.card;
+        return { ...sh, ...(sh.overlays ? { overlays: sh.overlays.map(imgUrl) } : {}),
+          ...(c && c.images ? { visual: { ...sh.visual, card: { ...c, images: c.images.map(url) } } } : {}) }; };
+      const poseOf = sh => sh && sh.layout === 'cutout' && sh.visual && sh.visual.pose && sh.visual.pose.file ? { ...sh.visual.pose, src: url(sh.visual.pose.file) } : null;
+      job = { ...job, shot: fix(job.shot), shots: job.shots && job.shots.map(sh => ({ ...fix(sh), _pose: poseOf(sh) })),
+        pose: poseOf(job.shot), floor: plan.stage_floor ? url(plan.stage_floor) : null, floorTop: plan.floor_top };
       const f = join(tmp, `job-${seq}.html`);
       writeFileSync(f, pageHtml(job));
       // a blank page renders as an all-black (transparent) clip with no error — seen when the template file was swapped
@@ -468,7 +525,7 @@ async function captureShot(b, s, enc, bgRuns) {
 }
 
 // ---------------------------------------------------------------- board + cards
-const bgFor = s => { const v = s.visual || {}; if (v.ai) return findAsset('ai', v.ai); if (v.proof && v.proof_file) return findAsset('proof', v.proof_file); return null; };
+const bgFor = s => { const v = s.visual || {}; if (v.image) return planPath(v.image); if (v.ai) return findAsset('ai', v.ai); if (v.proof && v.proof_file) return findAsset('proof', v.proof_file); return null; };
 const needsRender = s => (s.visual && (s.visual.card || s.visual.panel)) || (s.overlays || []).length || bgFor(s);
 
 // visual.footage = { file (relative to plan), start (s in that file), speed? (<1 = slow-mo to stretch a short shot), source? } → real clip fills the picture area (split top half · proof full frame)
@@ -496,7 +553,7 @@ function speakerStill(s) {
   const src = planPath(plan.source_video), flip = mirrored(s);
   return grabStill(s, 'speaker', src, (s.t[0] + s.t[1]) / 2, `${sdr(src)}scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}${flip ? ',hflip' : ''}`, flip ? '-flip' : '');
 }
-const showsSpeaker = s => ['split', 'full-speaker', 'cutout'].includes(s.layout) || (s.layout === 'full-card' && plan.face_circle && s.face !== false);
+const showsSpeaker = s => (['split', 'full-speaker', 'cutout'].includes(s.layout) && !(s.visual && s.visual.pose)) || (s.layout === 'full-card' && plan.face_circle && s.face !== false);
 
 const boardTitle = () => `${plan.title || basename(PLAN_DIR)} · ${plan.shots.at(-1).t[1]} วิ · ${plan.shots.length} ช็อต`;
 async function board(b) {
@@ -640,6 +697,9 @@ async function compose() {
     // plan.cutout = { engine, scale } · per shot: cutout_engine, cutout_scale · results cached in OUT/cutout/*.webm
     // (name carries start + frame count + engine → a retimed shot re-cuts · VP9 alpha ~10 MB/shot; ProRes 4444 at 2K is ~470 MB/shot, never a cache)
     const CUT = { scale: 0.62, ...(plan.cutout || {}) };
+    // cutout.fade_side (0–0.5): fade the cut-out's left/right edges — a half-body clip ends in a straight line where the
+    // original frame stopped, which shows on a full-frame backdrop
+    const sideFade = CUT.fade_side ? `,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip(min(X,W-X)/(W*${CUT.fade_side}),0,1)'` : '';
     const cutoutOf = async (s, ss, n) => {
       const engine = shotEngine(s); if (engine === 'none' || engine === 'off') return null;
       const dir = join(OUT, 'cutout'); mkdirSync(dir, { recursive: true });
@@ -665,12 +725,13 @@ async function compose() {
       const seg = join(tmp, `seg-${String(list.length).padStart(3, '0')}.mp4`); list.push(seg);
       const inMain = ['-ss', ss, '-i', src];
       let fc, ins = inMain;
-      const cut = s.layout === 'cutout' && clip ? await cutoutOf(s, ss, n) : null;
+      const posed = s.layout === 'cutout' && s.visual && s.visual.pose;   // still photo of the speaker already drawn on the stage → no live speaker
+      const cut = s.layout === 'cutout' && clip && !posed ? await cutoutOf(s, ss, n) : null;
       const cutCard = s.layout === 'full-card' && clip && FC && s.face !== false && useCutCard ? await cutoutOf(s, ss, n) : null;
       const foot = ft => `${sdr(planPath(ft.file))}setpts=PTS/${ft.speed || 1},fps=${FPS},${TO709}`;
       if (cutCard) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cutCard]; fc = `[0:v]fps=${FPS},setsar=1[b];${bust('1:v', FC.card_y ?? 230, flip)}`; }
       else if (s.layout === 'full-card' && clip && FC && s.face !== false) { ins = ['-i', clip, ...inMain]; fc = `[0:v]fps=${FPS},setsar=1[b];${face('1:v', FC.card_y ?? 230, PS)}`; }
-      else if (s.layout === 'full-card' && clip) { ins = ['-i', clip]; fc = `[0:v]fps=${FPS},setsar=1[v]`; }
+      else if ((s.layout === 'full-card' || posed) && clip) { ins = ['-i', clip]; fc = `[0:v]fps=${FPS},setsar=1[v]`; }
       else if (s.layout === 'split' && s.visual && s.visual.footage) {   // real clip fills the top half (cover-crop) · speaker below · text layer keyed on top
         const ft = s.visual.footage, [wy, wh] = s.split_window || plan.split_window || [260, 960], half = px(960);
         ins = [...inMain, '-ss', String(ft.start || 0), '-i', planPath(ft.file), ...(clip ? ['-i', clip] : [])];
@@ -687,7 +748,7 @@ async function compose() {
           : `[0:v]${PS},split[pa][pb];[pa]crop=${OW}:${half}:0:${px(wy)},boxblur=40:2[pbg];[pb]crop=${OW}:${px(wh)}:0:${px(wy)},scale=-2:${half}[pfg];[pbg][pfg]overlay=(W-w)/2:0`;   // fit + blurred sides
         fc = `${sp},pad=${OW}:${OH}:0:${half}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
       else if (cut) { ins = ['-i', clip, '-c:v', 'libvpx-vp9', '-i', cut]; const cw = Math.round(OW * (s.cutout_scale ?? CUT.scale) / 2) * 2;   // libvpx decoder keeps the alpha · whole frame scaled down, bottom edge on the frame bottom
-        fc = `[0:v]fps=${FPS},setsar=1[b];[1:v]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},scale=${cw}:-2,setsar=1[p];[b][p]overlay=(W-w)/2:H-h:format=auto[v]`; }
+        fc = `[0:v]fps=${FPS},setsar=1[b];[1:v]${flip ? 'hflip,' : ''}scale=${OW}:${OH}:force_original_aspect_ratio=increase,crop=${OW}:${OH},fps=${FPS},scale=${cw}:-2,setsar=1${sideFade}[p];[b][p]overlay=(W-w)/2:H-h:format=auto[v]`; }
       else if (s.layout === 'cutout' && clip && FC && s.face !== false) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];${face('0:v', FC.cutout_y ?? 850, PS)}`; }
       else if (s.layout === 'cutout' && clip) { ins = [...inMain, '-i', clip]; fc = `[1:v]fps=${FPS},setsar=1[b];[0:v]${PS},scale=${px(600)}:-2,crop=${px(600)}:${px(760)}:0:${px(120)},pad=${px(612)}:${px(772)}:${px(6)}:${px(6)}:white[p];[b][p]overlay=(W-w)/2:H-h-${px(40)}[v]`; }
       else if (clip) { ins = [...inMain, '-i', clip]; fc = `[0:v]${PS}[p];[1:v]${KEY}[o];[p][o]overlay=0:0[v]`; }
@@ -698,9 +759,13 @@ async function compose() {
     writeFileSync(join(tmp, 'list.txt'), list.map(f => `file '${basename(f)}'`).join('\n'));
     const silent = join(tmp, 'video.mp4'), out = join(OUT, 'preview-composite.mp4');
     await run(['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', silent], { cwd: tmp });
-    await run(['-i', silent, '-i', src, '-map', '0:v', '-map', '1:a?', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', out]);
-    const cuts = plan.shots.filter(s => s.layout === 'cutout').map(shotEngine);
-    console.log(`✓ preview-composite.mp4 (${plan.shots.at(-1).t[1]} วิ · ${OW}×${OH} @ ${FPS} · ภาพ+การ์ดบนคลิปจริง${FC ? (useCutCard ? ` · ${SPEAKER}ตัดพื้นบนการ์ด` : ` · หน้า${SPEAKER}วงกลมบนการ์ด`) : ''}${cuts.length ? ` · cutout ตัดพื้นจริง (${[...new Set(cuts)].join('/')})` : ''})`);
+    // plan.whip: blur across every cut (the stage transition) → the one place compose re-encodes the joined video
+    const whip = whipFilter(plan.shots, plan.whip, K);
+    const vcodec = whip ? ['-vf', `${whip},${TO709}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '16', '-preset', 'medium', ...TAG709] : ['-c:v', 'copy'];
+    await run(['-i', silent, '-i', src, '-map', '0:v', '-map', '1:a?', ...vcodec, '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', out]);
+    const cuts = plan.shots.filter(s => s.layout === 'cutout' && !(s.visual && s.visual.pose)).map(shotEngine);
+    const poses = plan.shots.filter(s => s.visual && s.visual.pose).length, whips = whip ? (whip.match(/between/g) || []).length : 0;
+    console.log(`✓ preview-composite.mp4 (${plan.shots.at(-1).t[1]} วิ · ${OW}×${OH} @ ${FPS} · ภาพ+การ์ดบนคลิปจริง${FC ? (useCutCard ? ` · ${SPEAKER}ตัดพื้นบนการ์ด` : ` · หน้า${SPEAKER}วงกลมบนการ์ด`) : ''}${cuts.length ? ` · cutout ตัดพื้นจริง (${[...new Set(cuts)].join('/')})` : ''}${poses ? ` · รูปนิ่ง ${poses} ช็อต` : ''}${whips ? ` · whip ${whips} รอยต่อ` : ''})`);
   } finally {
     try { rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* Windows may hold a file a moment longer */ }
   }
@@ -783,7 +848,7 @@ function prompts() {
 // ---------------------------------------------------------------- CapCut edit sheet
 const HOW = {
   split: s => `แทร็กหลัก = วิดีโอ${SPEAKER} เลื่อนลงให้หน้าอยู่ครึ่งล่าง · แทร็กบน = \`${s.id}-split.mp4\` → Chroma key สีเขียว (ครึ่งล่างจะเห็น${SPEAKER})`,
-  cutout: s => `แทร็กหลัก = \`${s.id}-cutout.mp4\` (ภาพเต็มจอ) · แทร็กบน = ${SPEAKER}ตัดพื้นแล้ว (\`python -m engine.cutout <คลิป> <ชื่อ>.mov\` · compose ทำ \`cutout/${s.id}-*.webm\` ไว้แล้ว) → ย่อ ~62% ชิดล่างกลาง`,
+  cutout: s => s.visual && s.visual.pose ? `\`${s.id}-cutout.mp4\` เต็มจอ (ฉาก + พื้นเวที + รูปนิ่งของ${SPEAKER}อยู่ในไฟล์แล้ว · เสียงพูดเดินต่อ)` : `แทร็กหลัก = \`${s.id}-cutout.mp4\` (ภาพเต็มจอ) · แทร็กบน = ${SPEAKER}ตัดพื้นแล้ว (\`python -m engine.cutout <คลิป> <ชื่อ>.mov\` · compose ทำ \`cutout/${s.id}-*.webm\` ไว้แล้ว) → ย่อ ~${Math.round((s.cutout_scale ?? (plan.cutout || {}).scale ?? 0.62) * 100)}% ชิดล่างกลาง`,
   'full-card': s => `\`${s.id}-full-card.mp4\` เต็มจอ ทับภาพ${SPEAKER} (เสียงพูดเดินต่อ)`,
   'full-speaker': s => `วิดีโอ${SPEAKER}เต็มจอ${(s.overlays || []).length ? ` · แทร็กบน = \`${s.id}-full-speaker.mp4\` → Chroma key สีเขียว` : ''}`,
   proof: s => `แทร็กหลัก = ของจริง: ${(s.visual || {}).proof || ''}${(s.overlays || []).length ? ` · แทร็กบน = \`${s.id}-proof.mp4\` → Chroma key` : ''}`,

@@ -259,6 +259,52 @@
   .duo::before { content: ""; position: absolute; inset: 0; background: var(--primary); mix-blend-mode: lighten; z-index: 1; }
   .duo::after { content: ""; position: absolute; inset: 0; background: var(--paper); mix-blend-mode: multiply; z-index: 1; }
 
+  /* ---------- mode: stage (plan.mode = "stage") — references/stage-style.md ----------
+     photos only · cutout stage: photo backdrop + ONE shared floor plate over the lower third (the speaker always stands on the same floor)
+     · photo cards with rounded corners on creased grid paper (light / dark) · a round badge pops in with blur · no bounce */
+  .stage-floor { position: absolute; left: 0; right: 0; top: 1300px; bottom: 0; background-size: cover; background-position: center top;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 140px); mask-image: linear-gradient(to bottom, transparent 0, #000 140px); }
+  .stage-floor::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,.18), transparent 35%); }
+  .pose { position: absolute; left: 50%; translate: -50% 0; animation: fade-in .08s both; filter: drop-shadow(0 18px 30px rgba(0,0,0,.35)); }
+  .grid-paper { position: absolute; inset: 0; background-color: color-mix(in srgb, var(--paper) 88%, #8a8a8a);
+    background-image: linear-gradient(rgba(0,0,0,.10) 2px, transparent 2px), linear-gradient(90deg, rgba(0,0,0,.10) 2px, transparent 2px);
+    background-size: 66px 66px; background-position: -10px -24px; }
+  .grid-paper.dark { background-color: var(--primary-deep); background-image: linear-gradient(rgba(255,255,255,.12) 2px, transparent 2px), linear-gradient(90deg, rgba(255,255,255,.12) 2px, transparent 2px); }
+  .crease { position: absolute; inset: 0; opacity: .7; mix-blend-mode: multiply; pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1080' height='1920'><filter id='c'><feTurbulence type='fractalNoise' baseFrequency='.0035 .006' numOctaves='4' seed='7'/><feDiffuseLighting lighting-color='white' surfaceScale='4'><feDistantLight azimuth='225' elevation='52'/></feDiffuseLighting></filter><rect width='100%' height='100%' filter='url(%23c)'/></svg>"); }
+  .grid-paper.dark + .crease { mix-blend-mode: screen; opacity: .16; filter: invert(1); }
+  .gcw { position: absolute; inset: 0; }
+  .gc { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; padding-top: 210px; }
+  .gc-strip { position: relative; width: 1080px; height: 640px; flex: none; }
+  .gc-row { position: absolute; left: 0; top: 0; height: 100%; display: flex; gap: 46px; padding-left: 150px; }
+  .gc-row.mb { filter: url(#hblur); opacity: 0; }
+  .gc-card { width: 780px; height: 640px; flex: none; border-radius: 28px; background-size: cover; background-position: center 30%; box-shadow: 0 26px 50px -12px rgba(0,0,0,.45); }
+  .gc-strip.solo .gc-card { animation: gc-in .35s cubic-bezier(.16, 1, .3, 1) both; }
+  @keyframes gc-in { from { opacity: 0; transform: translateY(70px) scale(.96); filter: blur(10px); } to { opacity: 1; transform: none; filter: none; } }
+  /* the badge sits on the card's lower-right corner, never on a face */
+  .gc-badge { position: absolute; left: 860px; top: 570px; width: 290px; height: 290px; margin: -145px 0 0 -145px; border-radius: 50%; background: var(--primary-deep); color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-shadow: 0 16px 40px rgba(0,0,0,.45); z-index: 3;
+    animation: badge-in .16s cubic-bezier(.2, .8, .3, 1) both; }
+  .gcw.dark .gc-badge { background: var(--accent); }
+  .gc-badge b { font-size: 80px; font-weight: 800; line-height: 1.05; }
+  .gc-badge i { font-style: normal; font-size: 40px; font-weight: 700; line-height: 1.2; opacity: .9; margin-top: 6px; }
+  @keyframes badge-in { from { transform: scale(0); filter: blur(8px); } to { transform: scale(1); filter: none; } }
+  .gc-text { margin-top: 64px; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 60px; }
+  .gc-text .title-line { color: var(--ink); animation: gc-in .3s cubic-bezier(.16, 1, .3, 1) both; }
+  .gc-text .title-line.acc { background: var(--accent); color: #fff; padding: 4px 30px 14px; border-radius: 16px; }
+  .gcw.dark .gc-text .title-line { color: #fff; }
+  .gcw.dark .gc-text .title-line.acc { background: var(--accent2); color: var(--primary-deep); }
+  .gc-big { font-size: 210px; font-weight: 800; line-height: 1; color: var(--ink); animation: badge-in .2s cubic-bezier(.2, .8, .3, 1) both; }
+  .gcw.dark .gc-big { color: var(--accent2); }
+  .gc-cap { font-size: 64px; font-weight: 700; line-height: 1.3; color: color-mix(in srgb, var(--ink) 80%, transparent); margin-top: 18px; animation: gc-in .3s .15s both; }
+  .gcw.dark .gc-cap { color: #eee; }
+  .gc .source { position: static; margin-top: 22px; color: color-mix(in srgb, var(--ink) 65%, transparent); }
+  .gcw.dark .source { color: #bbb; }
+  .look-stage .label { border-radius: 14px; background: var(--primary-deep); color: #fff; }
+  .look-stage .label .acc { color: var(--accent2); }
+  .look-stage .label.accent2 { background: var(--accent2); color: var(--primary-deep); }
+  .look-stage .label.accent2 .acc { color: var(--accent); }
+
   .ov-img { position: absolute; transform: translate(-50%, -50%); animation: ov-in .45s both; }
   @keyframes ov-in { from { opacity: 0; } to { opacity: 1; } }
   /* ---------- storyboard ---------- */
@@ -284,6 +330,7 @@
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute"><filter id="hblur" x="-10%" y="0" width="120%" height="100%"><feGaussianBlur stdDeviation="30 0"/></filter></svg>
 <div id="root"></div>
 <script>
 // JOB is injected by thv.mjs: { kind: 'frame'|'board', shot?, shots?, title?, matte?, bgImage?, kbDur? }
@@ -328,8 +375,46 @@ function chartSvg(c, t0) {
   return { svg: svg + '</svg>', X, Y, Wc };
 }
 
+// mode stage · grid card: { theme: light|dark, images: [url] (2+ = carousel, slides left at c.at[i] s), badge: {big, small, at},
+//   lines[] + accent (text under the photo) · big + caption (a number) · source }
+function gridCard(c) {
+  const dark = c.theme === 'dark', wrap = h('div', 'gcw' + (dark ? ' dark' : ''));
+  wrap.appendChild(h('div', 'grid-paper' + (dark ? ' dark' : ''))); wrap.appendChild(h('div', 'crease'));
+  const col = h('div', 'gc');
+  const t0 = c.delay || 0, imgs = c.images || [];
+  if (imgs.length) {
+    const strip = h('div', 'gc-strip' + (imgs.length === 1 ? ' solo' : ''));
+    const row = () => { const r = h('div', 'gc-row'); imgs.forEach(u => { const k = h('div', 'gc-card'); k.style.backgroundImage = `url("${u}")`; r.appendChild(k); }); return r; };
+    const sharp = row(); strip.appendChild(sharp);
+    if (imgs.length > 1) {   // carousel: each step slides one card left in 0.22 s · a horizontally blurred copy fades in during the move = motion blur
+      const blur = row(); blur.classList.add('mb'); strip.appendChild(blur);
+      const at = c.at || imgs.slice(1).map((_, i) => t0 + .9 * (i + 1)), END = 600, SL = .22, step = 826;   // END: one long timeline (s) the seek can land anywhere in
+      const kf = [{ offset: 0, transform: 'translateX(0)' }], ko = [{ offset: 0, opacity: 0 }];
+      at.forEach((t, i) => { const a = t / END, b = (t + SL) / END;
+        kf.push({ offset: a, transform: `translateX(${-step * i}px)` }, { offset: b, transform: `translateX(${-step * (i + 1)}px)` });
+        ko.push({ offset: a, opacity: 0 }, { offset: (a + b) / 2, opacity: .9 }, { offset: b, opacity: 0 }); });
+      kf.push({ offset: 1, transform: `translateX(${-step * at.length}px)` }); ko.push({ offset: 1, opacity: 0 });
+      kf.forEach((k, i) => { if (i % 2 === 1) k.easing = 'cubic-bezier(.5,0,.2,1)'; });   // ease only the slide segments
+      [sharp, blur].forEach(r => r.animate(kf, { duration: END * 1000, fill: 'both' }));
+      blur.animate(ko, { duration: END * 1000, fill: 'both' });
+    }
+    if (c.badge) { const b = h('div', 'gc-badge', `<b>${esc(c.badge.big)}</b>${c.badge.small ? `<i>${esc(c.badge.small)}</i>` : ''}`); strip.appendChild(delay(b, c.badge.at ?? t0 + .35)); }
+    col.appendChild(strip);
+  } else col.style.paddingTop = '420px';
+  const tx = h('div', 'gc-text');
+  if (c.lines) { const size = Math.min(c.size || 999, lineSize(c.lines.map(l => l.replace(/\*/g, ''))) * .72);
+    c.lines.forEach((l, i) => { const e = h('div', 'title-line' + (i === c.accent ? ' acc' : ''), esc(l.replace(/\*/g, ''))); e.style.fontSize = Math.round(size) + 'px'; tx.appendChild(delay(e, (c.text_at ?? t0 + .15) + i * .18)); }); }
+  if (c.big != null) { const e = delay(h('div', 'gc-big', esc(c.big)), c.text_at ?? t0 + .2); if (c.big_size) e.style.fontSize = c.big_size + 'px'; tx.appendChild(e); }
+  if (c.caption) tx.appendChild(delay(h('div', 'gc-cap', esc(c.caption)), (c.text_at ?? t0 + .2) + .15));
+  if (c.source) tx.appendChild(h('div', 'source', esc(c.source)));
+  if (!imgs.length) tx.style.marginTop = '0';
+  col.appendChild(tx); wrap.appendChild(col);
+  return wrap;
+}
+
 // full-screen card types
 function fullCard(c) {
+  if (c.type === 'grid') return gridCard(c);
   const f = h('div', 'full' + themeOf(c));
   const t0 = c.delay || 0;
   if (c.type === 'title') {
@@ -403,7 +488,7 @@ function fullCard(c) {
   if (c.source && ['stat', 'chart', 'doc', 'quote', 'timeline'].includes(c.type)) f.appendChild(h('div', 'source', esc(c.source)));   // vox rule: every number / document on screen shows where it came from
   return f;
 }
-const FULL = new Set(['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline']);
+const FULL = new Set(['title', 'cta', 'stat', 'flow', 'compare', 'doc', 'quote', 'chapter', 'chart', 'timeline', 'grid']);
 
 // hand-drawn marks in a w×h box (px) — slightly irregular so they read as drawn, not vector-perfect
 function annPath(shape, w, h, from, to) {
@@ -468,7 +553,7 @@ function buildFrame(shot, opts) {
     return fr;
   }
   const vox = opts.look === 'vox', v0 = shot.visual || {};
-  const fr = h('div', 'frame' + (vox ? ' look-vox' : '')); const layout = shot.layout;
+  const fr = h('div', 'frame' + (vox ? ' look-vox' : '') + (opts.look === 'stage' ? ' look-stage' : '')); const layout = shot.layout;
   fr.style.setProperty('--shot-dur', ((shot.t[1] - shot.t[0]) || 4) + 's');
   const top = layout === 'split' ? 960 : 1920;
   // background visual region
@@ -480,7 +565,13 @@ function buildFrame(shot, opts) {
       pr.style.rotate = (v0.tilt ?? -1.5) + 'deg'; im.style.backgroundImage = `url("${opts.bgImage}")`; if (opts.kbDur) im.style.setProperty('--kb-dur', opts.kbDur + 's');
       pr.appendChild(im); region.appendChild(pr); }
     else if (opts.bgImage) { const b = h('div', 'bg-img' + (opts.kb ? ' kb' : '')); b.style.backgroundImage = `url("${opts.bgImage}")`; if (opts.kbDur) b.style.setProperty('--kb-dur', opts.kbDur + 's');
-      if (v0.treat === 'duotone') { const d = h('div', 'duo'); d.appendChild(b); region.appendChild(d); } else region.appendChild(b); }
+      if (v0.treat === 'duotone') { const d = h('div', 'duo'); d.appendChild(b); region.appendChild(d); } else region.appendChild(b);
+      // stage: one shared floor plate over the lower third of every cutout backdrop (static while the photo drifts = parallax)
+      if (opts.floor && layout === 'cutout' && v0.stage !== false) { const fl = h('div', 'stage-floor'); fl.style.backgroundImage = `url("${opts.floor}")`;
+        const ft = v0.floor_top ?? opts.floorTop; if (ft != null) fl.style.top = ft + 'px'; region.appendChild(fl); }
+      // pose: a still cut-out photo of the speaker stands on the stage instead of the live clip (compose then skips the live cut-out)
+      if (opts.pose) { const im = h('img', 'pose'); im.src = opts.pose.src; im.style.height = (opts.pose.h || 1500) + 'px'; im.style.top = (opts.pose.y ?? 980) + 'px';
+        if (opts.pose.x != null) im.style.left = opts.pose.x + '%'; region.appendChild(im); } }
     else if (opts.placeholder) { const v = shot.visual || {}; const kind = (v.proof || v.footage) ? 'proof' : v.ai ? 'ai' : (v.card || v.panel) ? '' : 'ai';
       if (kind) { const p = h('div', 'ph ' + kind, esc(v.footage ? 'คลิปจริง: ' + (v.footage.label || v.footage.file) : v.proof ? 'ของจริง: ' + v.proof : 'AI: ' + (v.ai || '?'))); p.style.inset = 0; region.appendChild(p); } }
     if (shot.visual && shot.visual.panel) { const pn = h('div', 'full' + (['paper', 'accent'].includes(tone(shot.visual.panel)) ? ' ' + tone(shot.visual.panel) : ' primary')); region.appendChild(pn); }   // plain panel for chat / labels
@@ -506,7 +597,7 @@ function buildFrame(shot, opts) {
         (F.mode || 'cutout') === 'circle' ? { borderRadius: '50%' } : { WebkitMaskImage: fade, maskImage: fade })); }
     else fr.appendChild(h('div', 'face-slot'));
   }
-  if (layout === 'cutout' && opts.placeholder) {
+  if (layout === 'cutout' && opts.placeholder && !opts.pose) {
     if (shot._spk) {   // compose scales the whole frame to cutout_scale, bottom-centre, and cuts the background away
       const cw = Math.round(1080 * (shot._cut || .62)), ch = Math.round(1920 * (shot._cut || .62));
       const d = spkDiv(shot, [(1080 - cw) / 2, 1920 - ch, cw, ch], `${cw}px ${ch}px`, '0 0', { outline: '6px dashed rgba(255, 255, 255, .85)', outlineOffset: '-6px' });
@@ -525,7 +616,7 @@ function render(job) {
   const root = document.getElementById('root');
   if (job.kind === 'board') {
     const b = h('div', 'board'); b.appendChild(h('h1', null, esc(job.title || 'Storyboard')));
-    job.shots.forEach(s => { const th = h('div', 'thumb'); const box = h('div', 'box'); box.appendChild(buildFrame(s, { placeholder: true, bgImage: s._bg, look: job.look, faceSlot: job.faceSlot }));
+    job.shots.forEach(s => { const th = h('div', 'thumb'); const box = h('div', 'box'); box.appendChild(buildFrame(s, { placeholder: true, bgImage: s._bg, look: job.look, faceSlot: job.faceSlot, floor: job.floor, floorTop: job.floorTop, pose: s._pose }));
       th.appendChild(box); th.appendChild(h('div', 'cap', `<b>${esc(s.id)}</b> · ${s.t[0]}–${s.t[1]} วิ · ${esc(s.layout)}${s.beat ? ' · <b>' + esc(s.beat) + '</b>' : ''}<br>${esc((s.say || '').slice(0, 70))}`)); b.appendChild(th); });
     root.appendChild(b);
   } else root.appendChild(buildFrame(job.shot, job));

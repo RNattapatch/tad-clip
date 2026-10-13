@@ -1,6 +1,7 @@
 """Cut the speaker out of a clip → transparent video for compose, CapCut or DaVinci.
 
     python -m engine.cutout <clip> <out.mov|out.webm> [vision|tb] [--force]
+    python -m engine.cutout <photo.png|jpg|webp> <out.png> [vision|tb] [--force]   (still photo → PNG, cropped to the person)
 
 Engines (config.cutout.engine — "auto" = vision on macOS, tb elsewhere when installed, else off):
   vision  Apple Vision person segmentation, accurate quality · ~2 s per 1 s of 720p · no install beyond
@@ -12,6 +13,8 @@ Engines (config.cutout.engine — "auto" = vision on macOS, tb elsewhere when in
           Dev/testing only: env TAD_CLIP_TB_PYTHON points tb at another python (a separate venv that already has
           transparent-background + torch) instead of the kit venv. Not user-facing.
 Output: .mov = ProRes 4444 (yuva444p10le) for editors · .webm = VP9 with alpha (~1/30 the size; compose cache).
+Still photo: .png with real transparency, EXIF rotation applied, cropped to the person (+ a small margin) — the pose image
+for mode stage (thv visual.pose), so its height in the plan is the person's height.
 """
 import json
 import os
@@ -28,6 +31,8 @@ from engine.kit import IS_MAC, IS_WINDOWS, KitError
 HERE = Path(__file__).resolve().parent
 SWIFT_SRC = HERE / "vision-matte.swift"
 ENGINES = ("vision", "tb")
+STILL_EXT = (".png", ".jpg", ".jpeg", ".webp")
+STILL_MARGIN = 0.02   # transparent margin kept around the person in a still cut-out (fraction of the cropped size)
 HDR_TRANSFERS = ("smpte2084", "arib-std-b67")   # PQ · HLG (iPhone HDR video)
 # output is limited-range BT.709 and tagged so (editors and thv compose then read the colours the same way)
 TO709 = "scale=out_color_matrix=bt709:out_range=tv"
@@ -78,8 +83,14 @@ def resolve_engine(requested: str | None = None, cfg: dict | None = None) -> str
 
 # ---------------------------------------------------------------- helpers
 
+def is_still(p) -> bool:
+    return Path(p).suffix.lower() in STILL_EXT
+
+
 def encoder_args(out: Path) -> list:
     ext = Path(out).suffix.lower()
+    if ext == ".png":
+        raise KitError("ไฟล์ปลายทาง .png ใช้กับรูปนิ่งเท่านั้น — คลิปวิดีโอต้องลงท้าย .mov หรือ .webm")
     if ext == ".mov":    # ProRes 4444 for CapCut / DaVinci
         return ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-an"]
     if ext == ".webm":   # small VP9 alpha (thv compose cache)
@@ -237,13 +248,73 @@ def _tb(src: Path, out: Path, info: dict, work: Path) -> None:
     kit.run(_alphamerge(plain, ["-i", str(maps[0])], rate, out))
 
 
+# ---------------------------------------------------------------- still photo → transparent PNG
+
+def _still_matte_vision(src: Path, w: int, h: int):
+    from PIL import Image
+    r = subprocess.run([str(vision_bin()), str(src), "accurate"], capture_output=True)
+    if r.returncode != 0 or len(r.stdout) != w * h:
+        raise KitError("Apple Vision ตัดพื้นหลังรูปไม่สำเร็จ\n" + r.stderr.decode("utf-8", "replace")[-2000:])
+    return Image.frombytes("L", (w, h), r.stdout)
+
+
+def _still_matte_tb(src: Path, w: int, h: int, work: Path):
+    from PIL import Image
+    py = tb_python()
+    if not tb_installed(py):
+        raise KitError("ยังไม่ได้ติดตั้ง transparent-background — รัน setup ใหม่พร้อม --with-cutout หรือใช้ engine vision (Mac)")
+    # plain relative name inside the work dir (OpenCV on Windows cannot open non-ASCII paths)
+    kit.run([py, "-c", TB_MAIN, "--source", src.name, "--dest", ".", "--type", "map", "--device", tb_device(py)], cwd=str(work), env=tb_env())
+    maps = sorted(work.glob(f"{src.stem}_map.*"))
+    if not maps:
+        raise KitError("transparent-background ไม่ได้สร้างไฟล์ matte (*_map.*)")
+    with Image.open(maps[0]) as m:
+        return m.convert("L").resize((w, h))
+
+
+def cutout_still(src, out, engine: str) -> dict:
+    """Photo of a person → `out` .png: the person on a transparent background, cropped to them. Returns {width, height}."""
+    from PIL import Image, ImageOps
+    src, out = Path(src), Path(out)
+    if out.suffix.lower() != ".png":
+        raise KitError(f"รูปนิ่งต้องออกเป็น .png (พื้นใส) — ได้ {out.name}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="tadclip-cutout-") as td:
+        work = Path(td)
+        with Image.open(src) as im:
+            rgb = ImageOps.exif_transpose(im).convert("RGB")   # phone photos are stored sideways + an EXIF rotation tag
+        plain = work / "src.png"
+        rgb.save(plain)
+        w, h = rgb.size
+        if engine == "vision":
+            matte = _still_matte_vision(plain, w, h)
+        elif engine == "tb":
+            matte = _still_matte_tb(plain, w, h, work)
+        else:
+            raise KitError("เครื่องนี้ยังไม่มีตัวตัดพื้นหลัง (cutout.engine = off) — Mac ใช้ vision ได้เลย · Windows รัน setup พร้อม --with-cutout")
+        box = matte.point(lambda v: 255 if v > 24 else 0).getbbox()
+        if not box:
+            raise KitError(f"ไม่เจอคนในรูป {src.name} — ใช้รูปที่เห็นคนชัดๆ (ครึ่งตัวหรือเต็มตัว พื้นหลังไม่รก)")
+        rgba = rgb.copy()
+        rgba.putalpha(matte)
+        mx, my = round((box[2] - box[0]) * STILL_MARGIN), round((box[3] - box[1]) * STILL_MARGIN)
+        rgba = rgba.crop((max(0, box[0] - mx), max(0, box[1] - my), min(w, box[2] + mx), min(h, box[3] + my)))
+        tmp_out = work / "out.png"
+        rgba.save(tmp_out)
+        shutil.move(str(tmp_out), out)
+    return {"width": rgba.width, "height": rgba.height}
+
+
 # ---------------------------------------------------------------- entry
 
 def cutout(src, out, engine: str) -> dict:
-    """Cut the speaker out of `src` into `out` (.mov / .webm) with `engine` (vision | tb). Returns the probe info."""
+    """Cut the speaker out of `src` into `out` (.mov / .webm) with `engine` (vision | tb). Returns the probe info.
+    A still photo (.png/.jpg/.webp) goes to cutout_still → .png."""
     src, out = Path(src), Path(out)
     if not src.exists():
-        raise KitError(f"ไม่เจอคลิป: {src}")
+        raise KitError(f"ไม่เจอไฟล์: {src}")
+    if is_still(src):
+        return cutout_still(src, out, engine)
     encoder_args(out)   # fail fast on a wrong extension
     out.parent.mkdir(parents=True, exist_ok=True)
     info = probe(src)
@@ -270,9 +341,10 @@ def main(argv=None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
-    ap = argparse.ArgumentParser(prog="python -m engine.cutout", description="ตัดพื้นหลังคนในคลิป → .mov (ProRes 4444) หรือ .webm (VP9) พื้นใส")
-    ap.add_argument("clip")
-    ap.add_argument("out", help=".mov หรือ .webm")
+    ap = argparse.ArgumentParser(prog="python -m engine.cutout",
+                                 description="ตัดพื้นหลังคนในคลิป → .mov (ProRes 4444) หรือ .webm (VP9) พื้นใส · รูปนิ่ง → .png พื้นใส")
+    ap.add_argument("clip", help="คลิป หรือรูปนิ่ง (.png .jpg .webp)")
+    ap.add_argument("out", help=".mov หรือ .webm (คลิป) · .png (รูปนิ่ง)")
     ap.add_argument("engine", nargs="?", default=None, help="vision | tb (ไม่ใส่ = ตาม config.cutout.engine)")
     ap.add_argument("--force", action="store_true", help="ทำใหม่แม้มีไฟล์ปลายทางแล้ว")
     a = ap.parse_args(argv)

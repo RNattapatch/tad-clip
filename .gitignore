@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 node_modules/
 tests/**/out/
+engine/visual/examples/out*/
 tests/**/work/
 *.filter
 .tadclip-test/

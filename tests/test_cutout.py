@@ -269,3 +269,123 @@ def test_tb_cutout_has_alpha(tmp_path):
     assert r.returncode == 0, r.stderr
     lo, hi = _alpha_range(out, 0.2)
     assert lo < 30 and hi > 220, (lo, hi)
+
+
+# ---------------------------------------------------------------- still photos (mode stage: visual.pose)
+
+def _photo(path, size=(120, 200), exif_rotate=False):
+    """Grey photo with a darker 'person' block in the middle; exif_rotate stores it sideways + an EXIF 'rotate' tag."""
+    from PIL import Image
+    im = Image.new("RGB", size, (200, 200, 200))
+    im.paste((40, 60, 90), (40, 50, 80, 190))
+    if exif_rotate:   # stored rotated 90° CW · orientation 6 = viewers rotate it back 90° CW → upright
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        im.transpose(Image.Transpose.ROTATE_90).save(path, exif=exif)
+    else:
+        im.save(path)
+    return path
+
+
+def _fake_vision(tmp_path, monkeypatch, box=(40, 50, 80, 190)):
+    """vision-matte stand-in: reads the PNG it is given and prints a W×H matte that is white inside `box`."""
+    fake = tmp_path / "fake-matte"
+    fake.write_text(f"#!{sys.executable}\nimport sys\nfrom PIL import Image\nw, h = Image.open(sys.argv[1]).size\n"
+                    f"x0, y0, x1, y1 = {box}\n"
+                    "sys.stdout.buffer.write(bytes(255 if x0 <= x < x1 and y0 <= y < y1 else 0 for y in range(h) for x in range(w)))\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(cutout, "vision_bin", lambda: fake)
+
+
+def test_png_output_is_for_stills_only():
+    with pytest.raises(kit.KitError, match=r"\.mov"):
+        cutout.encoder_args(Path("คลิป.png"))
+    assert cutout.is_still("รูป ท่า 1.JPG") and cutout.is_still("x.webp") and not cutout.is_still("x.mp4")
+
+
+def test_still_needs_png_output(tmp_path):
+    src = _photo(tmp_path / "รูป.jpg")
+    with pytest.raises(kit.KitError, match=r"\.png"):
+        cutout.cutout(src, tmp_path / "out.webm", "vision")
+
+
+@pytest.mark.skipif(kit.IS_WINDOWS, reason="the fake matte tool is a POSIX script")
+def test_still_vision_gives_a_transparent_png_cropped_to_the_person(tmp_path, monkeypatch):
+    from PIL import Image
+    _fake_vision(tmp_path, monkeypatch)
+    out = tmp_path / "ผล ท่า.png"
+    info = cutout.cutout(_photo(tmp_path / "รูป ท่า 1.jpg"), out, "vision")
+    with Image.open(out) as im:
+        assert im.mode == "RGBA"
+        assert im.size == (info["width"], info["height"])
+        assert 40 <= im.width <= 44 and 140 <= im.height <= 146, im.size     # 40×140 person + 2 % margin
+        a = im.getchannel("A")
+        assert a.getpixel((im.width // 2, im.height // 2)) == 255             # the person is opaque
+        assert a.getpixel((0, 0)) == 0                                         # margin is transparent
+
+
+@pytest.mark.skipif(kit.IS_WINDOWS, reason="the fake matte tool is a POSIX script")
+def test_still_applies_the_exif_rotation_before_the_matte(tmp_path, monkeypatch):
+    from PIL import Image
+    _fake_vision(tmp_path, monkeypatch)
+    out = tmp_path / "upright.png"
+    cutout.cutout(_photo(tmp_path / "sideways.jpg", exif_rotate=True), out, "vision")
+    with Image.open(out) as im:
+        assert im.height > im.width, im.size                                   # tall person, not lying on its side
+
+
+@pytest.mark.skipif(kit.IS_WINDOWS, reason="the fake matte tool is a POSIX script")
+def test_still_without_a_person_is_a_thai_error(tmp_path, monkeypatch):
+    _fake_vision(tmp_path, monkeypatch, box=(0, 0, 0, 0))
+    with pytest.raises(kit.KitError, match="ไม่เจอคน"):
+        cutout.cutout(_photo(tmp_path / "ว่าง.png"), tmp_path / "out.png", "vision")
+
+
+def test_still_tb_runs_on_the_photo_and_merges_its_map(tmp_path, monkeypatch):
+    """Windows path: transparent-background writes <name>_map.png next to the photo; the kit merges it into the alpha."""
+    from PIL import Image
+    monkeypatch.setenv("TAD_CLIP_HOME", str(tmp_path / "บ้าน kit"))
+    monkeypatch.setattr(cutout, "tb_python", lambda: "tb-python")
+    monkeypatch.setattr(cutout, "tb_installed", lambda *a: True)
+    monkeypatch.setattr(cutout, "tb_device", lambda *a, **k: "cpu")
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["cwd"] = cmd, kw["cwd"]
+        w, h = Image.open(Path(kw["cwd"]) / cmd[cmd.index("--source") + 1]).size
+        m = Image.new("L", (w // 2, h // 2), 0)                               # tb maps can come back at another size
+        m.paste(255, (20, 25, 40, 95))
+        m.save(Path(kw["cwd"]) / "src_map.png")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(cutout.kit, "run", fake_run)
+    out = tmp_path / "ผล tb.png"
+    cutout.cutout(_photo(tmp_path / "รูป.webp"), out, "tb")
+    assert seen["cmd"][seen["cmd"].index("--source") + 1] == "src.png"      # plain ASCII name inside the work dir
+    with Image.open(out) as im:
+        assert im.mode == "RGBA" and 40 <= im.width <= 48 and 140 <= im.height <= 150, im.size   # map upscaled ×2 (soft edge)
+
+
+@mac_only
+def test_vision_cuts_a_real_photo(tmp_path):
+    """A frame of the fixture (a real person) → transparent PNG through the CLI, like a user making a pose image."""
+    photo = tmp_path / "ท่า จากคลิป.jpg"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-y", "-ss", "5", "-i", str(FIXTURE), "-frames:v", "1", "-q:v", "3", str(photo)])
+    out = tmp_path / "ท่า พื้นใส.png"
+    r = _run_cli(photo, out, "vision")
+    assert r.returncode == 0, r.stderr
+    from PIL import Image
+    with Image.open(out) as im:
+        lo, hi = im.getchannel("A").getextrema()
+        assert im.mode == "RGBA" and lo < 30 and hi > 220, (im.mode, lo, hi)
+
+
+@mac_only
+def test_vision_video_matte_has_no_empty_first_frame(tmp_path):
+    """Vision used to return an empty matte for frame 0 → every cut-out shot opened with one frame without the speaker."""
+    seg = _segment(tmp_path, 5, 0.5)
+    out = seg.parent / "เฟรมแรก.webm"
+    r = _run_cli(seg, out, "vision")
+    assert r.returncode == 0, r.stderr
+    lo, hi = _alpha_range(out, 0)
+    assert hi > 220, (lo, hi)
