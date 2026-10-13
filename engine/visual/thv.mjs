@@ -237,6 +237,8 @@ export function check() {
       if (s.layout !== 'cutout') errs.push(`${tag}: visual.pose ใช้กับ layout cutout เท่านั้น`);
       if (!v.pose.file || !existsSync(planPath(v.pose.file))) errs.push(`${tag}: visual.pose.file ไม่เจอ (${v.pose.file || '-'}) — ทำรูปพื้นใสด้วย python -m engine.cutout <รูป> <ชื่อ>.png`);
       else if (!/\.png$/i.test(v.pose.file)) warns.push(`${tag}: visual.pose.file ไม่ใช่ .png — รูปที่ยังไม่ตัดพื้นจะเห็นพื้นหลังเดิมเป็นกล่อง`);
+      // the pose is drawn on the backdrop photo: without one the still never appears (the live speaker or a bare card shows instead)
+      if (s.layout === 'cutout' && !bgFor(s)) (v.ai ? warns : errs).push(`${tag}: visual.pose ต้องมีภาพฉากหลังที่มีไฟล์แล้ว (visual.image หรือภาพ ai/proof_file) — ${v.ai ? `ภาพ ai "${v.ai}" ยังไม่มีไฟล์ ทำภาพก่อนเรนเดอร์` : 'ไม่งั้นรูปนิ่งไม่ถูกวาด ช็อตนี้จะไม่มีผู้พูด'}`);
     }
     if (v.footage && !existsSync(planPath(v.footage.file || ''))) errs.push(`${tag}: visual.footage.file ไม่เจอ (${v.footage.file})`);
     if (v.footage && !v.footage.source && !(s.overlays || []).some(o => o.type === 'source')) warns.push(`${tag}: คลิปจริงไม่มีป้ายที่มา (footage.source หรือ overlay source)`);
