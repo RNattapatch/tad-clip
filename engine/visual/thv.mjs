@@ -268,6 +268,8 @@ export function check() {
       if (c.at && (!Array.isArray(c.at) || c.at.length !== Math.max(0, (c.images || []).length - 1))) errs.push(`${tag}: grid at[] ต้องมี ${Math.max(0, (c.images || []).length - 1)} ค่า (วินาทีที่ปัดไปภาพถัดไป · ภาพละ 1 ค่ายกเว้นภาพแรก)`);
       if (c.big != null && !c.source) warns.push(`${tag}: grid มีตัวเลข (big) แต่ไม่มี source — ตัวเลขบนจอต้องบอกที่มา`);
       if (c.badge && !c.badge.big) errs.push(`${tag}: grid badge ต้องมี big`);
+      if (c.badge && !(c.images || []).length) warns.push(`${tag}: grid badge วางบนมุมภาพ — ไม่มี images[] จะไม่ขึ้น`);
+      if (Array.isArray(c.at) && c.at.some((t, i) => !(t > (i ? c.at[i - 1] : 0) && t < dur(s)))) warns.push(`${tag}: grid at[] ต้องเรียงจากน้อยไปมาก และอยู่ในช่วง 0–${dur(s)} วิของช็อต — ไม่งั้นภาพหลังๆ ไม่ได้ขึ้น`);
     }
     if (c.type === 'timeline' && !(c.events || []).length) errs.push(`${tag}: timeline ต้องมี events[{t, text}]`);
     if (['chart', 'doc', 'stat', 'quote'].includes(c.type) && !c.source) (plan.look === 'vox' ? errs : warns).push(`${tag}: ${c.type} ไม่มี source — ตัวเลข/เอกสาร/คำพูดบนจอต้องบอกที่มา (ของจริงเท่านั้น)`);
