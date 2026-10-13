@@ -389,3 +389,26 @@ def test_vision_video_matte_has_no_empty_first_frame(tmp_path):
     assert r.returncode == 0, r.stderr
     lo, hi = _alpha_range(out, 0)
     assert hi > 220, (lo, hi)
+
+
+@mac_only
+def test_vision_cuts_an_iphone_heic_photo(tmp_path):
+    """iPhone photos are .HEIC by default; Pillow cannot read them, sips converts (EXIF rotation kept)."""
+    jpg = tmp_path / "รูป.jpg"
+    kit.run([kit.tool("ffmpeg"), "-v", "error", "-y", "-ss", "5", "-i", str(FIXTURE), "-frames:v", "1", "-q:v", "3", str(jpg)])
+    heic = tmp_path / "ท่า iPhone.HEIC"
+    kit.run(["sips", "-s", "format", "heic", str(jpg), "--out", str(heic)])
+    out = tmp_path / "ท่า.png"
+    r = _run_cli(heic, out, "vision")
+    assert r.returncode == 0, r.stderr
+    from PIL import Image
+    with Image.open(out) as im:
+        assert im.mode == "RGBA" and im.height > im.width, (im.mode, im.size)
+
+
+def test_heic_off_mac_is_a_thai_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cutout, "IS_MAC", False)
+    heic = tmp_path / "ท่า.heic"
+    heic.write_bytes(b"not really a heic")
+    with pytest.raises(kit.KitError, match="HEIC"):
+        cutout.cutout(heic, tmp_path / "out.png", "tb")
