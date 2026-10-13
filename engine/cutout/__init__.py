@@ -176,12 +176,18 @@ def swiftc_path() -> str | None:
     return found[-1] if r.returncode == 0 and found else None
 
 
-def vision_bin() -> Path:
+def vision_bin(still: bool = False) -> Path:
+    """The compiled helper. still=True needs a build of the current source (older builds cannot read photos);
+    for video an older build still works, so a Mac that lost its compiler (a macOS upgrade often does) keeps cutting."""
     if not IS_MAC:
         raise KitError("ตัวตัดพื้นหลัง vision ใช้ได้เฉพาะ Mac — บน Windows ใช้ tb (ติดตั้งเพิ่มด้วย setup --with-cutout) หรือใช้ layout split แทน")
     bin_ = kit.cache_dir() / "vision-matte"
     if needs_compile(bin_, SWIFT_SRC):
         swiftc = swiftc_path()
+        if not swiftc and bin_.exists() and not still:
+            print("⚠️  คอมไพล์ตัวตัดพื้น Apple Vision รุ่นใหม่ไม่ได้ (ไม่มี Xcode Command Line Tools) — ใช้รุ่นเดิมไปก่อน "
+                  "(เฟรมแรกของแต่ละช็อตอาจไม่มีคน) · แก้: xcode-select --install", file=sys.stderr)
+            return bin_
         if not swiftc:
             raise KitError("ตัดพื้นหลังด้วย Apple Vision ต้องมี Xcode Command Line Tools — เปิด Terminal แล้วพิมพ์: xcode-select --install "
                            "(กดติดตั้งในหน้าต่างที่เด้งขึ้น แล้วรันใหม่) · หรือใช้ layout split แทน")
@@ -252,7 +258,7 @@ def _tb(src: Path, out: Path, info: dict, work: Path) -> None:
 
 def _still_matte_vision(src: Path, w: int, h: int):
     from PIL import Image
-    r = subprocess.run([str(vision_bin()), str(src), "accurate"], capture_output=True)
+    r = subprocess.run([str(vision_bin(still=True)), str(src), "accurate"], capture_output=True)
     if r.returncode != 0 or len(r.stdout) != w * h:
         raise KitError("Apple Vision ตัดพื้นหลังรูปไม่สำเร็จ\n" + r.stderr.decode("utf-8", "replace")[-2000:])
     return Image.frombytes("L", (w, h), r.stdout)
